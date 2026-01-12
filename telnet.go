@@ -13,18 +13,17 @@ import (
 	"time"
 )
 
-// Plain text mode for C64 Ultimate compatibility (no ANSI codes).
-// For screen "clear", we output enough newlines to push old content off.
-var (
-	ansiReset   = ""
-	ansiBold    = ""
-	ansiReverse = ""
-	ansiMagenta = ""
-	ansiCyan    = ""
-	ansiGray    = ""
-	ansiRed     = ""
-	ansiGreen   = ""
-	ansiClear   = "\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n----------------------------------------\r\n"
+// ANSI escape codes for terminal rendering.
+const (
+	ansiReset   = "\033[0m"
+	ansiBold    = "\033[1m"
+	ansiReverse = "\033[7m"
+	ansiMagenta = "\033[35m"
+	ansiCyan    = "\033[36m"
+	ansiGray    = "\033[90m"
+	ansiRed     = "\033[31m"
+	ansiGreen   = "\033[32m"
+	ansiClear   = "\033[2J\033[H"
 )
 
 // Server limits.

@@ -257,8 +257,8 @@ void uci_write_file(uint8_t *data, int length)
 
     cmd[0] = 0x00;
     cmd[1] = DOS_CMD_WRITE_DATA;
-    cmd[2] = 0x00;
-    cmd[3] = 0x00;
+    cmd[2] = length & 0xFF;         // Length low byte
+    cmd[3] = (length >> 8) & 0xFF;  // Length high byte
     for (x = 0; x < length; x++)
         cmd[x + 4] = data[x];
 

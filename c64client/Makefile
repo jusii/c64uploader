@@ -32,8 +32,8 @@ ifneq ($(OSCAR64_INCLUDE),)
 CFLAGS += -i=$(OSCAR64_INCLUDE)
 endif
 
-# Cartridge flags (8KB autostart)
-CRTFLAGS = -tf=crt8
+# Cartridge flags (16KB autostart - 8KB too small for this app)
+CRTFLAGS = -tf=crt16
 
 .PHONY: all clean prg crt d64
 
@@ -67,6 +67,16 @@ run: prg
 deploy: prg
 	@if [ -z "$$U2P_HOST" ]; then echo "Set U2P_HOST to your Ultimate IP"; exit 1; fi
 	curl -T $(PRG) ftp://$$U2P_HOST/Usb0/$(PROJECT).prg
+
+# Run CRT directly on Ultimate II+ via HTTP API
+runcrt: crt
+	@if [ -z "$$U2P_HOST" ]; then echo "Set U2P_HOST to your Ultimate IP"; exit 1; fi
+	curl -X POST --data-binary @$(CRT) "http://$$U2P_HOST/v1/runners:run_crt"
+
+# Run PRG directly on Ultimate II+ via HTTP API
+runprg: prg
+	@if [ -z "$$U2P_HOST" ]; then echo "Set U2P_HOST to your Ultimate IP"; exit 1; fi
+	curl -X POST --data-binary @$(PRG) "http://$$U2P_HOST/v1/runners:run_prg"
 
 help:
 	@echo "Assembly64 Browser - C64 Client"

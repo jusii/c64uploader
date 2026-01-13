@@ -377,6 +377,7 @@ char get_key(void)
             if (k == KSCAN_CSR_DOWN && shift) return 'u';
             if (k == KSCAN_S || k == KSCAN_CSR_DOWN) return 'd';
             if (k == KSCAN_SLASH) return '/';
+            if (k == KSCAN_CSR_RIGHT && !shift) return '>';  // Right = enter category
         }
         // In list view
         else if (current_page == 1)
@@ -386,10 +387,14 @@ char get_key(void)
             if (k == KSCAN_S || k == KSCAN_CSR_DOWN) return 'd';
             if (k == KSCAN_N) return 'n';
             if (k == KSCAN_P) return 'p';
+            if (k == KSCAN_CSR_RIGHT && shift) return 8;  // Left = back
         }
         // In search mode
         else if (current_page == 2)
         {
+            // Left arrow = back
+            if (k == KSCAN_CSR_RIGHT && shift) return 8;  // Left = back
+
             // Cursor navigation only when we have results
             if (item_count > 0)
             {
@@ -428,6 +433,31 @@ void wait_key(void)
 //-----------------------------------------------------------------------------
 // UI Drawing
 //-----------------------------------------------------------------------------
+
+// Draw a single item line (for partial updates)
+void draw_item(int i, bool selected)
+{
+    byte y = i + 4;
+    clear_line(y);
+    if (selected)
+    {
+        print_at_color(0, y, ">", 1);  // White
+        print_at_color(2, y, item_names[i], 1);
+    }
+    else
+    {
+        print_at_color(2, y, item_names[i], 14);  // Light blue (default)
+    }
+}
+
+// Update cursor display without full redraw (only redraws 2 lines)
+void update_cursor(int old_cursor, int new_cursor)
+{
+    if (old_cursor >= 0 && old_cursor < item_count)
+        draw_item(old_cursor, false);
+    if (new_cursor >= 0 && new_cursor < item_count)
+        draw_item(new_cursor, true);
+}
 
 void draw_list(const char *title)
 {
@@ -527,13 +557,12 @@ int main(void)
     draw_list("assembly64 - categories");
 
     bool running = true;
-    char last_key = 0;
 
     while (running)
     {
         char key = get_key();
 
-        if (key != 0 && key != last_key)
+        if (key != 0)
         {
             // Get current title
             const char *title = "assembly64 - categories";
@@ -566,16 +595,27 @@ int main(void)
             case 'u':  // Up
                 if (cursor > 0)
                 {
+                    int old = cursor;
                     cursor--;
-                    draw_list(title);
+                    update_cursor(old, cursor);
                 }
                 break;
 
             case 'd':  // Down
                 if (cursor < item_count - 1)
                 {
+                    int old = cursor;
                     cursor++;
-                    draw_list(title);
+                    update_cursor(old, cursor);
+                }
+                break;
+
+            case '>':  // Right arrow - enter category (not run)
+                if (current_page == 0)
+                {
+                    strcpy(current_category, item_names[cursor]);
+                    load_entries(current_category, 0);
+                    draw_list(current_category);
                 }
                 break;
 
@@ -662,7 +702,6 @@ int main(void)
                 break;
             }
         }
-        last_key = key;
     }
 
     disconnect_from_server();

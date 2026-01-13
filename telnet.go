@@ -24,8 +24,8 @@ const (
 	ansiRed       = "\033[31m"
 	ansiGreen     = "\033[32m"
 	ansiHome      = "\033[H"        // Cursor to top-left
+	ansiClear     = "\033[2J\033[H" // Full screen clear + cursor home
 	ansiClearLine = "\033[K"        // Clear from cursor to end of line
-	ansiClear     = "\033[2J\033[H" // Full clear (used only on initial render)
 )
 
 // Server limits.
@@ -34,37 +34,56 @@ const (
 	readTimeout    = 5 * time.Minute // Idle timeout per connection
 )
 
+// UI page states.
+const (
+	pageMenu   = iota // Main menu - select category or search
+	pageBrowse        // Browse entries in selected category
+	pageSearch        // Search input mode
+)
+
 // TelnetModel holds state for a telnet session.
 type TelnetModel struct {
-	index            *SearchIndex
-	apiClient        *APIClient
-	searchQuery      string
+	index          *SearchIndex
+	apiClient      *APIClient
+	assembly64Path string
+
+	// UI state.
+	page          int      // Current page (pageMenu, pageBrowse, pageSearch)
+	needsClear    bool     // Next render should do full clear
+	menuCursor    int      // Cursor position in menu
+	menuItems     []string // Menu items (categories + Search)
+
+	// Browse/search state.
 	selectedCategory string
+	searchQuery      string
 	filteredResults  []int
 	cursor           int
 	scrollOffset     int
-	width            int
-	height           int
-	statusMessage    string
-	err              error
-	assembly64Path   string
+
+	// Display.
+	width         int
+	height        int
+	statusMessage string
+	err           error
 }
 
 // NewTelnetModel creates a new telnet session model.
-// Defaults to C64 screen dimensions (40x25) for authentic experience.
 func NewTelnetModel(index *SearchIndex, apiClient *APIClient, assembly64Path string) *TelnetModel {
-	m := &TelnetModel{
-		index:            index,
-		apiClient:        apiClient,
-		assembly64Path:   assembly64Path,
-		selectedCategory: "All",
-		searchQuery:      "",
-		filteredResults:  make([]int, 0),
-		width:            40,
-		height:           25,
+	// Build menu items: categories + Search option.
+	menuItems := make([]string, len(index.CategoryOrder)+1)
+	copy(menuItems, index.CategoryOrder)
+	menuItems[len(menuItems)-1] = "Search"
+
+	return &TelnetModel{
+		index:          index,
+		apiClient:      apiClient,
+		assembly64Path: assembly64Path,
+		page:           pageMenu,
+		menuCursor:     0,
+		menuItems:      menuItems,
+		width:          40,
+		height:         25,
 	}
-	m.applyFilters()
-	return m
 }
 
 // applyFilters filters entries based on category and search query.
@@ -73,9 +92,11 @@ func (m *TelnetModel) applyFilters() {
 	query := strings.ToLower(m.searchQuery)
 
 	for i, entry := range m.index.Entries {
-		// Category filter.
-		if m.selectedCategory != "All" && entry.CategoryName != m.selectedCategory {
-			continue
+		// Category filter (skip if searching or "All").
+		if m.page == pageBrowse && m.selectedCategory != "All" {
+			if entry.CategoryName != m.selectedCategory {
+				continue
+			}
 		}
 
 		// Search filter.
@@ -98,51 +119,11 @@ func (m *TelnetModel) applyFilters() {
 }
 
 // adjustScroll adjusts scroll offset to keep cursor visible.
-func (m *TelnetModel) adjustScroll() {
-	viewHeight := m.height - 10
-	if viewHeight < 5 {
-		viewHeight = 5
-	}
-
+func (m *TelnetModel) adjustScroll(viewHeight int) {
 	if m.cursor < m.scrollOffset {
 		m.scrollOffset = m.cursor
 	} else if m.cursor >= m.scrollOffset+viewHeight {
 		m.scrollOffset = m.cursor - viewHeight + 1
-	}
-}
-
-// handleNavigation handles cursor navigation.
-func (m *TelnetModel) handleNavigation(action string) {
-	// Guard against empty results.
-	if len(m.filteredResults) == 0 {
-		m.cursor = 0
-		m.scrollOffset = 0
-		return
-	}
-
-	switch action {
-	case "up":
-		if m.cursor > 0 {
-			m.cursor--
-			m.adjustScroll()
-		}
-	case "down":
-		if m.cursor < len(m.filteredResults)-1 {
-			m.cursor++
-			m.adjustScroll()
-		}
-	case "pgup":
-		m.cursor = max(0, m.cursor-10)
-		m.adjustScroll()
-	case "pgdown":
-		m.cursor = min(len(m.filteredResults)-1, m.cursor+10)
-		m.adjustScroll()
-	case "home":
-		m.cursor = 0
-		m.scrollOffset = 0
-	case "end":
-		m.cursor = max(0, len(m.filteredResults)-1)
-		m.adjustScroll()
 	}
 }
 
@@ -157,7 +138,7 @@ func (m *TelnetModel) loadSelectedEntry() error {
 	// Read file.
 	data, err := os.ReadFile(entry.FullPath)
 	if err != nil {
-		return fmt.Errorf("failed to read file: %w", err)
+		return fmt.Errorf("read: %w", err)
 	}
 
 	// Call appropriate API based on file type.
@@ -169,11 +150,11 @@ func (m *TelnetModel) loadSelectedEntry() error {
 	case "crt":
 		err = m.apiClient.runCRT(data)
 	default:
-		return fmt.Errorf("unsupported file type: %s", entry.FileType)
+		return fmt.Errorf("unsupported: %s", entry.FileType)
 	}
 
 	if err != nil {
-		return fmt.Errorf("failed to load: %w", err)
+		return fmt.Errorf("load: %w", err)
 	}
 
 	m.statusMessage = fmt.Sprintf("Loaded: %s", entry.Name)
@@ -181,36 +162,18 @@ func (m *TelnetModel) loadSelectedEntry() error {
 	return nil
 }
 
-// refreshIndex reloads the Assembly64 index from disk.
-func (m *TelnetModel) refreshIndex() error {
-	index, err := loadAssembly64Index(m.assembly64Path)
-	if err != nil {
-		return fmt.Errorf("failed to refresh index: %w", err)
-	}
-	m.index = index
-	m.statusMessage = "Index refreshed"
-	m.err = nil
-	m.cursor = 0
-	m.scrollOffset = 0
-	m.applyFilters()
-	return nil
-}
-
 // startTelnetServer starts the telnet server.
 func startTelnetServer(c64Host string, port int, assembly64Path string) error {
-	// Validate port.
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("invalid port %d: must be between 1 and 65535", port)
 	}
 
-	// Load the Assembly64 index once at startup.
 	index, err := loadAssembly64Index(assembly64Path)
 	if err != nil {
 		return fmt.Errorf("failed to load Assembly64 database from %s: %w", assembly64Path, err)
 	}
 	slog.Info("Loaded Assembly64 index", "entries", len(index.Entries))
 
-	// Create TCP listener.
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return fmt.Errorf("failed to start listener: %w", err)
@@ -220,10 +183,8 @@ func startTelnetServer(c64Host string, port int, assembly64Path string) error {
 	slog.Info("Telnet server listening", "port", port)
 	fmt.Printf("Telnet server listening on :%d\n", port)
 
-	// Track active connections.
 	var activeConns int32
 
-	// Accept connections.
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -231,7 +192,6 @@ func startTelnetServer(c64Host string, port int, assembly64Path string) error {
 			continue
 		}
 
-		// Check connection limit.
 		if atomic.LoadInt32(&activeConns) >= maxConnections {
 			slog.Warn("Connection rejected: max connections reached", "remote", conn.RemoteAddr())
 			conn.Write([]byte("Server busy, try again later.\r\n"))
@@ -255,9 +215,6 @@ func handleConnection(conn net.Conn, index *SearchIndex, c64Host string, assembl
 	defer slog.Info("Client disconnected", "remote", conn.RemoteAddr())
 
 	// Send telnet negotiation for character mode.
-	// IAC WILL ECHO (255, 251, 1) - server will echo
-	// IAC WILL SGA (255, 251, 3) - suppress go ahead for character-at-a-time
-	// IAC WONT LINEMODE (255, 252, 34) - disable line mode
 	if _, err := conn.Write([]byte{255, 251, 1}); err != nil {
 		return
 	}
@@ -268,13 +225,12 @@ func handleConnection(conn net.Conn, index *SearchIndex, c64Host string, assembl
 		return
 	}
 
-	// Create per-connection API client and model.
 	apiClient := NewAPIClient(c64Host)
 	model := NewTelnetModel(index, apiClient, assembly64Path)
 
-	// Main loop.
-	// Initial render with full screen clear.
-	if _, err := conn.Write([]byte(ansiClear)); err != nil {
+	// Clear screen on connect - use multiple methods for compatibility.
+	// Form feed (ASCII 12) is widely supported for screen clear.
+	if _, err := conn.Write([]byte{12}); err != nil {
 		slog.Debug("Write error", "error", err)
 		return
 	}
@@ -284,10 +240,8 @@ func handleConnection(conn net.Conn, index *SearchIndex, c64Host string, assembl
 	}
 
 	for {
-		// Set read deadline.
 		conn.SetReadDeadline(time.Now().Add(readTimeout))
 
-		// Read input.
 		action, err := readInput(conn)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -298,140 +252,158 @@ func handleConnection(conn net.Conn, index *SearchIndex, c64Host string, assembl
 			return
 		}
 
-		// Skip empty actions (IAC sequences, etc.) - don't redraw.
 		if action == "" {
 			continue
 		}
 
-		// Handle input.
-		if !handleInput(model, action, conn) {
-			return // quit
+		cont, redraw := handleInput(model, action, conn)
+		if !cont {
+			return
 		}
 
-		// Render screen after handling input.
-		if err := renderScreen(conn, model); err != nil {
-			slog.Debug("Write error", "error", err)
-			return
+		if redraw {
+			if err := renderScreen(conn, model); err != nil {
+				slog.Debug("Write error", "error", err)
+				return
+			}
 		}
 	}
 }
 
-// renderScreen renders the full UI to the connection.
-// Adapts layout for 40-column (C64) vs 80-column terminals.
-// Uses cursor home + line clearing for smoother updates (no full screen clear).
+// renderScreen renders the UI based on current page.
 func renderScreen(conn net.Conn, m *TelnetModel) error {
 	var b strings.Builder
 
-	// Move cursor to top-left (don't clear - overwrite in place).
-	b.WriteString(ansiHome)
+	// Use form feed clear when needed (page transitions), otherwise home.
+	if m.needsClear {
+		b.WriteByte(12) // Form feed - clears screen on C64U
+		m.needsClear = false
+	} else {
+		b.WriteString(ansiHome)
+	}
 
-	// Title (shorter for 40-col).
+	switch m.page {
+	case pageMenu:
+		renderMenuPage(&b, m)
+	case pageBrowse:
+		renderBrowsePage(&b, m)
+	case pageSearch:
+		renderSearchPage(&b, m)
+	}
+
+	_, err := conn.Write([]byte(b.String()))
+	return err
+}
+
+// renderMenuPage renders the main menu.
+func renderMenuPage(b *strings.Builder, m *TelnetModel) {
+	// Title.
+	b.WriteString(ansiBold + ansiMagenta + "Assembly64 Browser" + ansiReset + ansiClearLine + "\r\n")
+	b.WriteString(ansiGray + "Select category:" + ansiReset + ansiClearLine + "\r\n" + ansiClearLine + "\r\n")
+
+	// Menu items.
+	for i, item := range m.menuItems {
+		if i == m.menuCursor {
+			b.WriteString(ansiBold + ansiMagenta + "> " + item + ansiReset + ansiClearLine + "\r\n")
+		} else {
+			b.WriteString("  " + item + ansiClearLine + "\r\n")
+		}
+	}
+
+	// Help.
+	b.WriteString(ansiClearLine + "\r\n" + ansiGray + "Arrows Enter Q:Quit" + ansiReset + ansiClearLine)
+}
+
+// renderBrowsePage renders the browse entries page.
+func renderBrowsePage(b *strings.Builder, m *TelnetModel) {
+	// Title with category.
 	b.WriteString(ansiBold + ansiMagenta)
-	if m.width <= 40 {
-		b.WriteString("Assembly64 Browser")
-	} else {
-		b.WriteString("C64 Ultimate - Assembly64 Browser")
-	}
-	b.WriteString(ansiReset + ansiClearLine + "\r\n")
-
-	// Category (compact for 40-col).
-	if m.width <= 40 {
-		b.WriteString(ansiCyan + "[" + m.selectedCategory + "]" + ansiReset)
-	} else {
-		b.WriteString(ansiBold + ansiCyan + "Category: " + ansiReset)
-		for i, cat := range m.index.CategoryOrder {
-			if cat == m.selectedCategory {
-				b.WriteString(ansiReverse + ansiBold + "[" + cat + "]" + ansiReset)
-			} else {
-				b.WriteString(ansiCyan + cat + ansiReset)
-			}
-			if i < len(m.index.CategoryOrder)-1 {
-				b.WriteString(" ")
-			}
-		}
-	}
-	b.WriteString(ansiClearLine + "\r\n")
-
-	// Search line.
-	if m.width <= 40 {
-		b.WriteString(ansiCyan + ">" + ansiReset)
-	} else {
-		b.WriteString(ansiBold + ansiCyan + "Search: " + ansiReset)
-	}
-	if m.searchQuery == "" {
-		if m.width > 40 {
-			b.WriteString(ansiGray + "(type to search)" + ansiReset)
-		}
-	} else {
-		b.WriteString(m.searchQuery)
-		b.WriteString(ansiReverse + " " + ansiReset)
-	}
+	b.WriteString(m.selectedCategory)
+	b.WriteString(ansiReset)
+	b.WriteString(ansiGray + fmt.Sprintf(" [%d]", len(m.filteredResults)) + ansiReset)
 	b.WriteString(ansiClearLine + "\r\n")
 
 	// Results list.
-	viewHeight := m.height - 8
+	viewHeight := m.height - 4
 	if viewHeight < 5 {
 		viewHeight = 5
 	}
 
 	if len(m.filteredResults) == 0 {
-		b.WriteString(ansiGray + "No results" + ansiReset + ansiClearLine + "\r\n")
-		// Clear remaining lines in view area.
-		for i := 1; i < viewHeight; i++ {
-			b.WriteString(ansiClearLine + "\r\n")
-		}
+		b.WriteString(ansiGray + "No entries" + ansiReset + "\r\n")
 	} else {
+		m.adjustScroll(viewHeight)
 		start := m.scrollOffset
 		end := min(start+viewHeight, len(m.filteredResults))
 
 		for i := start; i < end; i++ {
 			entry := m.index.Entries[m.filteredResults[i]]
 			line := formatEntryTelnet(entry, i == m.cursor, m.width)
-			b.WriteString(line)
-			b.WriteString(ansiClearLine + "\r\n")
-		}
-		// Clear any remaining lines if we have fewer results than viewHeight.
-		for i := end - start; i < viewHeight; i++ {
-			b.WriteString(ansiClearLine + "\r\n")
+			b.WriteString(line + ansiClearLine + "\r\n")
 		}
 	}
 
-	// Result count.
-	b.WriteString(ansiGray)
-	b.WriteString(fmt.Sprintf("[%d]", len(m.filteredResults)))
-	b.WriteString(ansiReset)
-
-	// Status/error message.
+	// Status line.
 	if m.err != nil {
-		b.WriteString(" " + ansiRed)
-		// Truncate error for narrow screens.
-		errStr := m.err.Error()
-		maxErr := m.width - 10
-		if maxErr > 0 && len(errStr) > maxErr {
-			errStr = errStr[:maxErr]
-		}
-		b.WriteString(errStr)
-		b.WriteString(ansiReset)
+		b.WriteString(ansiRed + m.err.Error() + ansiReset)
 	} else if m.statusMessage != "" {
-		b.WriteString(" " + ansiGreen + m.statusMessage + ansiReset)
+		b.WriteString(ansiGreen + m.statusMessage + ansiReset)
 	}
 	b.WriteString(ansiClearLine + "\r\n")
 
-	// Help line (compact for 40-col).
-	b.WriteString(ansiGray)
-	if m.width <= 40 {
-		b.WriteString("Arr Tab Ent Q")
-	} else {
-		b.WriteString("Arrows Tab Enter Q:Quit")
-	}
-	b.WriteString(ansiReset + ansiClearLine)
+	// Help.
+	b.WriteString(ansiGray + "Arrows Enter BS:Back Q:Quit" + ansiReset)
+}
 
-	_, err := conn.Write([]byte(b.String()))
-	return err
+// renderSearchPage renders the search input page.
+func renderSearchPage(b *strings.Builder, m *TelnetModel) {
+	// Title.
+	b.WriteString(ansiBold + ansiMagenta + "Search" + ansiReset + "\r\n")
+
+	// Search input.
+	b.WriteString(ansiCyan + ">" + ansiReset + " ")
+	b.WriteString(m.searchQuery)
+	b.WriteString(ansiReverse + " " + ansiReset) // Cursor.
+	b.WriteString(ansiClearLine + "\r\n\r\n")
+
+	// Results (if any search performed).
+	if m.searchQuery != "" {
+		b.WriteString(ansiGray + fmt.Sprintf("[%d results]", len(m.filteredResults)) + ansiReset + "\r\n")
+
+		viewHeight := m.height - 7
+		if viewHeight < 5 {
+			viewHeight = 5
+		}
+
+		if len(m.filteredResults) > 0 {
+			m.adjustScroll(viewHeight)
+			start := m.scrollOffset
+			end := min(start+viewHeight, len(m.filteredResults))
+
+			for i := start; i < end; i++ {
+				entry := m.index.Entries[m.filteredResults[i]]
+				line := formatEntryTelnet(entry, i == m.cursor, m.width)
+				b.WriteString(line + ansiClearLine + "\r\n")
+			}
+		}
+	} else {
+		b.WriteString(ansiGray + "Type to search, Enter to load" + ansiReset + "\r\n")
+	}
+
+	// Status line.
+	if m.err != nil {
+		b.WriteString(ansiRed + m.err.Error() + ansiReset)
+	} else if m.statusMessage != "" {
+		b.WriteString(ansiGreen + m.statusMessage + ansiReset)
+	}
+	b.WriteString(ansiClearLine + "\r\n")
+
+	// Help.
+	b.WriteString(ansiGray + "Type Arrows Enter BS:Back Q:Quit" + ansiReset)
 }
 
 // formatEntryTelnet formats a single entry for telnet display.
-// Adapts layout based on terminal width (40 for C64, 80+ for modern).
+// No ANSI colors on entries for faster C64U rendering.
 func formatEntryTelnet(entry ReleaseEntry, selected bool, width int) string {
 	cursor := " "
 	if selected {
@@ -441,34 +413,27 @@ func formatEntryTelnet(entry ReleaseEntry, selected bool, width int) string {
 	ext := "." + entry.FileType
 	name := entry.Name
 
-	var line string
 	if width <= 40 {
-		// 40-col: ">Name.ext" - compact, no metadata.
-		maxNameLen := width - 2 - len(ext) // 1 cursor, 1 space
+		maxNameLen := width - 2 - len(ext)
 		if maxNameLen < 8 {
 			maxNameLen = 8
 		}
 		if len(name) > maxNameLen {
 			name = name[:maxNameLen-2] + ".."
 		}
-		line = fmt.Sprintf("%s%s%s", cursor, name, ext)
-	} else {
-		// 80-col: "> Name                (Group, Year)  .ext"
-		maxNameLen := 30
-		if len(name) > maxNameLen {
-			name = name[:maxNameLen-3] + "..."
-		}
-		meta := ""
-		if entry.Group != "" || entry.Year != "" {
-			meta = fmt.Sprintf("(%s, %s)", entry.Group, entry.Year)
-		}
-		line = fmt.Sprintf("%s %-32s %-25s %s", cursor, name, meta, ext)
+		return fmt.Sprintf("%s%s%s", cursor, name, ext)
 	}
 
-	if selected {
-		return ansiBold + ansiMagenta + line + ansiReset
+	// 80-col mode.
+	maxNameLen := 30
+	if len(name) > maxNameLen {
+		name = name[:maxNameLen-3] + "..."
 	}
-	return line
+	meta := ""
+	if entry.Group != "" || entry.Year != "" {
+		meta = fmt.Sprintf("(%s, %s)", entry.Group, entry.Year)
+	}
+	return fmt.Sprintf("%s %-32s %-25s %s", cursor, name, meta, ext)
 }
 
 // readInput reads input from the connection and returns an action string.
@@ -484,70 +449,51 @@ func readInput(conn net.Conn) (string, error) {
 	}
 
 	data := buf[:n]
-
-	// Debug: log raw bytes received.
-	slog.Debug("readInput: raw bytes", "count", n, "hex", fmt.Sprintf("%x", data), "ascii", string(data))
+	slog.Debug("readInput: raw bytes", "count", n, "hex", fmt.Sprintf("%x", data))
 
 	// Handle telnet IAC sequences.
-	// C64U sends bytes one at a time, so we need to handle partial sequences.
-	// IAC (255) starts a command sequence.
 	if data[0] == 255 {
-		// Read more bytes to complete the IAC sequence.
 		conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 		more := make([]byte, 8)
 		n2, _ := conn.Read(more)
-		conn.SetReadDeadline(time.Time{}) // Reset deadline.
+		conn.SetReadDeadline(time.Time{})
 		if n2 > 0 {
-			data = append(data, more[:n2]...)
-			slog.Debug("readInput: IAC sequence", "hex", fmt.Sprintf("%x", data))
+			slog.Debug("readInput: IAC sequence", "hex", fmt.Sprintf("%x", append(data, more[:n2]...)))
 		}
-		// Skip the entire IAC sequence (return empty to get next input).
 		return "", nil
 	}
 
-	// Skip any stray IAC command bytes (251-254) that arrived separately.
-	// These are WILL/WONT/DO/DONT without the IAC prefix.
+	// Skip stray IAC command bytes.
 	if data[0] >= 251 && data[0] <= 254 {
-		slog.Debug("readInput: skipping stray IAC command byte", "byte", data[0])
 		return "", nil
 	}
 
-	// Handle common control characters BEFORE IAC option check.
-	// These are valid user inputs, not IAC option bytes.
-	// Note: We don't handle Ctrl+C (3) here because it conflicts with
-	// telnet SGA option code. Use 'q' to quit instead.
+	// Handle control characters.
 	switch data[0] {
-	case '\t': // Tab (9)
+	case '\t':
 		return "tab", nil
-	case '\r', '\n': // Enter (13, 10)
+	case '\r', '\n':
 		return "enter", nil
-	case 127, 8: // DEL or Backspace
+	case 127, 8:
 		return "backspace", nil
-	case 12: // Ctrl+L
+	case 12:
 		return "refresh", nil
 	}
 
-	// Skip option codes (0-50 range) that follow WILL/WONT/DO/DONT.
-	// But exclude control chars we already handled above.
-	// Common: 1=ECHO, 3=SGA, 34=LINEMODE.
+	// Skip IAC option bytes.
 	if len(data) == 1 && data[0] <= 50 {
-		slog.Debug("readInput: skipping IAC option byte", "byte", data[0])
 		return "", nil
 	}
 
 	// Parse escape sequences.
-	if data[0] == 27 { // ESC
-		// If we only got ESC, we need to check if more data is coming.
-		// Wait briefly for the rest of an escape sequence.
+	if data[0] == 27 {
 		if len(data) == 1 {
-			// Set a short deadline to see if more data arrives.
 			conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
 			more := make([]byte, 8)
 			n2, _ := conn.Read(more)
 			if n2 > 0 {
 				data = append(data, more[:n2]...)
 			} else {
-				// No more data - it's a standalone ESC.
 				return "quit", nil
 			}
 		}
@@ -584,10 +530,10 @@ func readInput(conn net.Conn) (string, error) {
 				}
 			}
 		}
-		return "", nil // Ignore unknown escape sequences
+		return "", nil
 	}
 
-	// Single character commands (for escape sequence fallthrough).
+	// Quit commands.
 	switch data[0] {
 	case 'q', 'Q':
 		return "quit", nil
@@ -598,76 +544,197 @@ func readInput(conn net.Conn) (string, error) {
 		return string(data[0]), nil
 	}
 
-	// Debug: unrecognized input.
-	slog.Debug("readInput: unrecognized", "byte", data[0], "hex", fmt.Sprintf("%02x", data[0]))
 	return "", nil
 }
 
-// handleInput processes user input and returns false to quit.
-func handleInput(m *TelnetModel, action string, conn net.Conn) bool {
-	// Clear previous status on new action.
-	if action != "" && action != "enter" {
+// handleInput processes user input based on current page.
+func handleInput(m *TelnetModel, action string, conn net.Conn) (bool, bool) {
+	// Clear status on any action except enter.
+	if action != "enter" {
 		m.statusMessage = ""
 		m.err = nil
 	}
 
+	switch m.page {
+	case pageMenu:
+		return handleMenuInput(m, action)
+	case pageBrowse:
+		return handleBrowseInput(m, action, conn)
+	case pageSearch:
+		return handleSearchInput(m, action, conn)
+	}
+	return true, false
+}
+
+// handleMenuInput handles input on the main menu page.
+func handleMenuInput(m *TelnetModel, action string) (bool, bool) {
 	switch action {
 	case "quit":
-		return false
+		return false, false
 
-	case "up", "down", "pgup", "pgdown", "home", "end":
-		m.handleNavigation(action)
-
-	case "tab":
-		// Cycle through categories.
-		currentIdx := -1
-		for i, cat := range m.index.CategoryOrder {
-			if cat == m.selectedCategory {
-				currentIdx = i
-				break
-			}
+	case "up":
+		if m.menuCursor > 0 {
+			m.menuCursor--
 		}
-		nextIdx := (currentIdx + 1) % len(m.index.CategoryOrder)
-		m.selectedCategory = m.index.CategoryOrder[nextIdx]
-		m.cursor = 0
-		m.scrollOffset = 0
-		m.applyFilters()
+		return true, true
+
+	case "down":
+		if m.menuCursor < len(m.menuItems)-1 {
+			m.menuCursor++
+		}
+		return true, true
 
 	case "enter":
-		m.statusMessage = "Loading..."
-		m.err = nil
-		renderScreen(conn, m)
-		if err := m.loadSelectedEntry(); err != nil {
-			m.err = err
-			m.statusMessage = ""
+		selected := m.menuItems[m.menuCursor]
+		if selected == "Search" {
+			// Go to search page.
+			m.page = pageSearch
+			m.needsClear = true
+			m.searchQuery = ""
+			m.filteredResults = nil
+			m.cursor = 0
+			m.scrollOffset = 0
+		} else {
+			// Go to browse page with selected category.
+			m.page = pageBrowse
+			m.needsClear = true
+			m.selectedCategory = selected
+			m.cursor = 0
+			m.scrollOffset = 0
+			m.applyFilters()
 		}
+		return true, true
+	}
+
+	return true, false
+}
+
+// handleBrowseInput handles input on the browse page.
+func handleBrowseInput(m *TelnetModel, action string, conn net.Conn) (bool, bool) {
+	switch action {
+	case "quit":
+		return false, false
+
+	case "backspace":
+		// Go back to menu.
+		m.page = pageMenu
+		m.needsClear = true
+		return true, true
+
+	case "up":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+		return true, true
+
+	case "down":
+		if len(m.filteredResults) > 0 && m.cursor < len(m.filteredResults)-1 {
+			m.cursor++
+		}
+		return true, true
+
+	case "pgup":
+		m.cursor = max(0, m.cursor-10)
+		return true, true
+
+	case "pgdown":
+		if len(m.filteredResults) > 0 {
+			m.cursor = min(len(m.filteredResults)-1, m.cursor+10)
+		}
+		return true, true
+
+	case "home":
+		m.cursor = 0
+		m.scrollOffset = 0
+		return true, true
+
+	case "end":
+		if len(m.filteredResults) > 0 {
+			m.cursor = len(m.filteredResults) - 1
+		}
+		return true, true
+
+	case "enter":
+		if len(m.filteredResults) > 0 {
+			m.statusMessage = "Loading..."
+			renderScreen(conn, m)
+			if err := m.loadSelectedEntry(); err != nil {
+				m.err = err
+				m.statusMessage = ""
+			}
+		}
+		return true, true
+	}
+
+	return true, false
+}
+
+// handleSearchInput handles input on the search page.
+func handleSearchInput(m *TelnetModel, action string, conn net.Conn) (bool, bool) {
+	switch action {
+	case "quit":
+		return false, false
 
 	case "backspace":
 		if len(m.searchQuery) > 0 {
+			// Remove last character from search.
 			m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
+			m.needsClear = true // Clear because results list changes
 			m.cursor = 0
 			m.scrollOffset = 0
 			m.applyFilters()
+			return true, true
+		} else {
+			// Empty search - go back to menu.
+			m.page = pageMenu
+			m.needsClear = true
+			return true, true
 		}
 
-	case "refresh":
-		m.statusMessage = "Refreshing..."
-		m.err = nil
-		renderScreen(conn, m)
-		if err := m.refreshIndex(); err != nil {
-			m.err = err
-			m.statusMessage = ""
+	case "up":
+		if m.cursor > 0 {
+			m.cursor--
 		}
+		return true, true
+
+	case "down":
+		if len(m.filteredResults) > 0 && m.cursor < len(m.filteredResults)-1 {
+			m.cursor++
+		}
+		return true, true
+
+	case "pgup":
+		m.cursor = max(0, m.cursor-10)
+		return true, true
+
+	case "pgdown":
+		if len(m.filteredResults) > 0 {
+			m.cursor = min(len(m.filteredResults)-1, m.cursor+10)
+		}
+		return true, true
+
+	case "enter":
+		if len(m.filteredResults) > 0 {
+			m.statusMessage = "Loading..."
+			renderScreen(conn, m)
+			if err := m.loadSelectedEntry(); err != nil {
+				m.err = err
+				m.statusMessage = ""
+			}
+		}
+		return true, true
 
 	default:
-		// Printable character for search.
+		// Printable character - add to search query.
 		if len(action) == 1 && action[0] >= 32 && action[0] <= 126 {
 			m.searchQuery += action
+			m.needsClear = true // Clear because results list changes
 			m.cursor = 0
 			m.scrollOffset = 0
 			m.applyFilters()
+			return true, true
 		}
 	}
 
-	return true
+	return true, false
 }

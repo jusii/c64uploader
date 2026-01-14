@@ -5,6 +5,9 @@ Remotely upload and run programs on Commodore 64 Ultimate via its [REST API](htt
 > [!NOTE]
 > This code was generated with AI coding assistant and is not thoroughly tested or reviewed.
 
+
+![System Diagram](./docs/system-diagram.png)
+
 ## Features
 
 This project consists of two components:
@@ -22,6 +25,9 @@ A command-line tool that runs on your PC and communicates with the C64 Ultimate 
 ### a64browser (C64 native application)
 
 A native C64 program that runs directly on the C64 Ultimate. It connects to the `c64uploader` server over the network, enabling you to browse and launch programs from your Assembly64 collection entirely from the C64 itself—no PC interaction needed once the server is running.
+
+
+
 
 ## c64uploader Usage
 

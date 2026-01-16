@@ -29,11 +29,13 @@ static char server_host[32] = DEFAULT_SERVER_HOST;
 static byte socket_id = 0;
 static bool connected = false;
 
-// Pages: 0=cats, 1=list, 2=search, 3=settings
-#define PAGE_CATS     0
-#define PAGE_LIST     1
-#define PAGE_SEARCH   2
-#define PAGE_SETTINGS 3
+// Pages: 0=cats, 1=list, 2=search, 3=settings, 4=advsearch, 5=advresults
+#define PAGE_CATS        0
+#define PAGE_LIST        1
+#define PAGE_SEARCH      2
+#define PAGE_SETTINGS    3
+#define PAGE_ADV_SEARCH  4
+#define PAGE_ADV_RESULTS 5
 
 // Menu/list state
 #define MAX_ITEMS 20
@@ -49,6 +51,32 @@ static int  current_page = PAGE_CATS;
 static char current_category[32];
 static char search_query[32];
 static int  search_query_len = 0;
+
+// Search category filter: 0=All, 1=Games, 2=Demos, 3=Music
+static int  search_category = 0;
+static const char *search_cat_names[] = {"All", "Games", "Demos", "Music"};
+
+// Advanced search form state
+#define ADV_FIELD_CAT     0
+#define ADV_FIELD_TITLE   1
+#define ADV_FIELD_GROUP   2
+#define ADV_FIELD_TYPE    3
+#define ADV_FIELD_TOP200  4
+#define ADV_FIELD_SEARCH  5  // Execute search button
+#define ADV_FIELD_COUNT   6
+
+static int  adv_cursor = 0;           // Current field
+static bool adv_editing = false;      // Are we editing a text field?
+static int  adv_edit_pos = 0;         // Cursor position in edit
+
+// Advanced search field values
+static int  adv_category = 0;         // 0=All, 1=Games, 2=Demos, 3=Music
+static char adv_title[24];
+static char adv_group[24];
+static int  adv_type = 0;             // 0=Any, 1=prg, 2=d64, 3=crt, 4=sid
+static bool adv_top200 = false;
+
+static const char *adv_type_names[] = {"Any", "prg", "d64", "crt", "sid"};
 
 // Settings edit state
 static int  settings_cursor = 0;  // Which setting is selected
@@ -360,9 +388,15 @@ void do_search(const char *query, int start)
 {
     print_status("searching...");
 
-    // Build command: "SEARCH offset count query"
+    // Build command: "SEARCH offset count [category] query"
     char cmd[64];
-    sprintf(cmd, "SEARCH %d 20 %s", start, query);
+    if (search_category == 0) {
+        // All categories - don't include category parameter
+        sprintf(cmd, "SEARCH %d 20 %s", start, query);
+    } else {
+        // Specific category filter
+        sprintf(cmd, "SEARCH %d 20 %s %s", start, search_cat_names[search_category], query);
+    }
 
     send_command(cmd);
     read_line();  // "OK n total"
@@ -409,6 +443,96 @@ void do_search(const char *query, int start)
 
     cursor = 0;
     current_page = 2;
+    print_status("ready");
+}
+
+// Execute advanced search
+void do_adv_search(int start)
+{
+    print_status("searching...");
+
+    // Build command: "ADVSEARCH offset count [key=value ...]"
+    char cmd[96];
+    sprintf(cmd, "ADVSEARCH %d 20", start);
+
+    // Add category filter
+    if (adv_category > 0)
+    {
+        strcat(cmd, " cat=");
+        strcat(cmd, search_cat_names[adv_category]);
+    }
+
+    // Add title filter
+    if (adv_title[0])
+    {
+        strcat(cmd, " title=");
+        strcat(cmd, adv_title);
+    }
+
+    // Add group filter
+    if (adv_group[0])
+    {
+        strcat(cmd, " group=");
+        strcat(cmd, adv_group);
+    }
+
+    // Add file type filter
+    if (adv_type > 0)
+    {
+        strcat(cmd, " type=");
+        strcat(cmd, adv_type_names[adv_type]);
+    }
+
+    // Add top200 filter
+    if (adv_top200)
+    {
+        strcat(cmd, " top200=1");
+    }
+
+    send_command(cmd);
+    read_line();  // "OK n total"
+
+    // Parse "OK n total"
+    char *p = line_buffer + 3;
+    int n = atoi(p);
+    p = strchr(p, ' ');
+    if (p)
+        total_count = atoi(p + 1);
+
+    item_count = 0;
+    offset = start;
+
+    // Read entry lines until "."
+    while (item_count < MAX_ITEMS && item_count < n)
+    {
+        read_line();
+        if (line_buffer[0] == '.')
+            break;
+
+        // Parse "id|name|group|year|type"
+        char *id_str = line_buffer;
+        char *name = strchr(id_str, '|');
+        if (name)
+        {
+            *name++ = 0;
+            item_ids[item_count] = atoi(id_str);
+
+            // Find end of name (next |)
+            char *end = strchr(name, '|');
+            if (end)
+                *end = 0;
+
+            strncpy(item_names[item_count], name, 31);
+            item_names[item_count][31] = 0;
+            item_count++;
+        }
+    }
+
+    // Consume remaining lines until "."
+    while (line_buffer[0] != '.')
+        read_line();
+
+    cursor = 0;
     print_status("ready");
 }
 
@@ -470,6 +594,9 @@ char get_key(void)
             // Left arrow = back
             if (k == KSCAN_CSR_RIGHT && shift) return 8;  // Left = back
 
+            // Tab = cycle category filter (C= key, scancode 0x0F)
+            if (k == 0x0F) return '\t';  // C= key for tab (cycle category)
+
             // Cursor navigation only when we have results
             if (item_count > 0)
             {
@@ -512,6 +639,39 @@ char get_key(void)
                 }
             }
         }
+        // In advanced search form
+        else if (current_page == PAGE_ADV_SEARCH)
+        {
+            if (!adv_editing)
+            {
+                // Navigation
+                if (k == KSCAN_W || (k == KSCAN_CSR_DOWN && shift)) return 'u';
+                if (k == KSCAN_S || k == KSCAN_CSR_DOWN) return 'd';
+                if (k == KSCAN_CSR_RIGHT && shift) return 8;  // Left = back
+                if (k == KSCAN_SPACE) return ' ';  // Toggle/cycle
+            }
+            else
+            {
+                // Editing text field - return typed characters
+                if (k < 64)
+                {
+                    byte c = (byte)keyb_codes[shift ? k + 64 : k];
+                    if (c >= 'a' && c <= 'z') return c - 32;  // Uppercase
+                    if (c >= 'A' && c <= 'Z') return c;
+                    if (c >= '0' && c <= '9') return c;
+                    if (c == ' ') return '_';  // Use underscore for spaces
+                }
+            }
+        }
+        // In advanced search results
+        else if (current_page == PAGE_ADV_RESULTS)
+        {
+            if (k == KSCAN_W || (k == KSCAN_CSR_DOWN && shift)) return 'u';
+            if (k == KSCAN_S || k == KSCAN_CSR_DOWN) return 'd';
+            if (k == KSCAN_N) return 'n';
+            if (k == KSCAN_P) return 'p';
+            if (k == KSCAN_CSR_RIGHT && shift) return 8;  // Left = back
+        }
     }
     return 0;
 }
@@ -530,9 +690,10 @@ void wait_key(void)
 //-----------------------------------------------------------------------------
 
 // Draw a single item line (for partial updates)
-void draw_item(int i, bool selected)
+// row_offset: 4 for normal lists, 2 for adv results
+void draw_item_at(int i, bool selected, byte row_offset)
 {
-    byte y = i + 4;
+    byte y = i + row_offset;
     clear_line(y);
     if (selected)
     {
@@ -545,13 +706,26 @@ void draw_item(int i, bool selected)
     }
 }
 
+// Draw item for normal list pages (row offset 4)
+void draw_item(int i, bool selected)
+{
+    draw_item_at(i, selected, 4);
+}
+
 // Update cursor display without full redraw (only redraws 2 lines)
-void update_cursor(int old_cursor, int new_cursor)
+// row_offset: 4 for normal lists, 2 for adv results
+void update_cursor_at(int old_cursor, int new_cursor, byte row_offset)
 {
     if (old_cursor >= 0 && old_cursor < item_count)
-        draw_item(old_cursor, false);
+        draw_item_at(old_cursor, false, row_offset);
     if (new_cursor >= 0 && new_cursor < item_count)
-        draw_item(new_cursor, true);
+        draw_item_at(new_cursor, true, row_offset);
+}
+
+// Update cursor for normal list pages (row offset 4)
+void update_cursor(int old_cursor, int new_cursor)
+{
+    update_cursor_at(old_cursor, new_cursor, 4);
 }
 
 void draw_list(const char *title)
@@ -564,9 +738,14 @@ void draw_list(const char *title)
     // Search input line (page 2 only)
     if (current_page == 2)
     {
-        print_at(0, 1, "search: ");
-        print_at(8, 1, search_query);
-        print_at(8 + search_query_len, 1, "_");  // Cursor
+        // Show category filter
+        print_at(0, 1, "[");
+        print_at_color(1, 1, search_cat_names[search_category], 5);  // Green
+        print_at(1 + strlen(search_cat_names[search_category]), 1, "] ");
+        // Search input
+        int searchX = 3 + strlen(search_cat_names[search_category]);
+        print_at(searchX, 1, search_query);
+        print_at(searchX + search_query_len, 1, "_");  // Cursor
     }
 
     // Info line
@@ -599,7 +778,7 @@ void draw_list(const char *title)
     else if (current_page == PAGE_LIST)
         print_at(0, 23, "w/s:move enter:run del:back n/p:page");
     else
-        print_at(0, 23, "type to search enter:run del:back");
+        print_at(0, 23, "type:search c=:cat enter:run del:back");
 }
 
 void draw_settings(void)
@@ -647,6 +826,126 @@ void draw_settings(void)
         print_at(0, 23, "type ip  enter:done  del:erase");
     else
         print_at(0, 23, "w/s:move enter:edit/save del:back");
+}
+
+// Draw a single advanced search field (for partial updates)
+void draw_adv_field(int field, bool selected)
+{
+    byte y = 2 + field * 2;  // Fields at rows 2, 4, 6, 8, 10, 12
+    byte color = selected ? 1 : 14;
+
+    clear_line(y);
+
+    // Cursor indicator
+    if (selected)
+        print_at_color(0, y, ">", 1);
+
+    switch (field)
+    {
+    case ADV_FIELD_CAT:
+        print_at_color(2, y, "category:", color);
+        print_at_color(12, y, "[", color);
+        print_at_color(13, y, search_cat_names[adv_category], 5);
+        print_at_color(13 + strlen(search_cat_names[adv_category]), y, "]", color);
+        break;
+
+    case ADV_FIELD_TITLE:
+        print_at_color(2, y, "title:", color);
+        if (adv_editing && selected)
+        {
+            print_at_color(10, y, adv_title, 5);
+            print_at_color(10 + strlen(adv_title), y, "_", 5);
+        }
+        else if (adv_title[0])
+            print_at_color(10, y, adv_title, color);
+        else
+            print_at_color(10, y, "(any)", 11);
+        break;
+
+    case ADV_FIELD_GROUP:
+        print_at_color(2, y, "group:", color);
+        if (adv_editing && selected)
+        {
+            print_at_color(10, y, adv_group, 5);
+            print_at_color(10 + strlen(adv_group), y, "_", 5);
+        }
+        else if (adv_group[0])
+            print_at_color(10, y, adv_group, color);
+        else
+            print_at_color(10, y, "(any)", 11);
+        break;
+
+    case ADV_FIELD_TYPE:
+        print_at_color(2, y, "type:", color);
+        print_at_color(10, y, "[", color);
+        print_at_color(11, y, adv_type_names[adv_type], 5);
+        print_at_color(11 + strlen(adv_type_names[adv_type]), y, "]", color);
+        break;
+
+    case ADV_FIELD_TOP200:
+        print_at_color(2, y, "top200:", color);
+        print_at_color(10, y, adv_top200 ? "[yes]" : "[no]", adv_top200 ? 5 : 11);
+        break;
+
+    case ADV_FIELD_SEARCH:
+        print_at_color(2, y, "[search]", color);
+        break;
+    }
+}
+
+// Update advanced search cursor (only redraws 2 lines)
+void update_adv_cursor(int old_field, int new_field)
+{
+    if (old_field >= 0 && old_field < ADV_FIELD_COUNT)
+        draw_adv_field(old_field, false);
+    if (new_field >= 0 && new_field < ADV_FIELD_COUNT)
+        draw_adv_field(new_field, true);
+}
+
+void draw_adv_search(void)
+{
+    clear_screen();
+    print_at_color(0, 0, "advanced search", 7);  // Yellow
+
+    // Draw all fields
+    for (int i = 0; i < ADV_FIELD_COUNT; i++)
+        draw_adv_field(i, i == adv_cursor);
+
+    // Help line
+    if (adv_editing)
+        print_at(0, 23, "type text  enter:done  del:erase");
+    else
+        print_at(0, 23, "w/s:move space:toggle enter:search del:back");
+}
+
+void draw_adv_results(void)
+{
+    clear_screen();
+
+    // Title with count on same line
+    char title[40];
+    sprintf(title, "results %d-%d of %d", offset + 1, offset + item_count, total_count);
+    print_at_color(0, 0, title, 7);  // Yellow
+
+    // Draw items starting at row 2 - limit to 19 items (rows 2-20)
+    // Row 21-22 empty, row 23 for help
+    int max_display = 19;
+    for (int i = 0; i < item_count && i < max_display; i++)
+    {
+        byte y = i + 2;
+        if (i == cursor)
+        {
+            print_at_color(0, y, ">", 1);  // White
+            print_at_color(2, y, item_names[i], 1);
+        }
+        else
+        {
+            print_at(2, y, item_names[i]);
+        }
+    }
+
+    // Help line at row 23
+    print_at(0, 23, "w/s:move enter:run del:back");
 }
 
 //-----------------------------------------------------------------------------
@@ -812,16 +1111,33 @@ int main(void)
                 }
                 break;
 
-            case '/':  // Start search
+            case '/':  // Start advanced search
                 if (current_page == PAGE_CATS)
                 {
-                    current_page = PAGE_SEARCH;
-                    search_query[0] = 0;
-                    search_query_len = 0;
+                    current_page = PAGE_ADV_SEARCH;
+                    adv_cursor = 0;
+                    adv_editing = false;
+                    // Reset form fields
+                    adv_category = 0;
+                    adv_title[0] = 0;
+                    adv_group[0] = 0;
+                    adv_type = 0;
+                    adv_top200 = false;
                     item_count = 0;
                     total_count = 0;
                     cursor = 0;
                     offset = 0;
+                    draw_adv_search();
+                }
+                break;
+
+            case '\t':  // Tab = cycle category in search mode
+                if (current_page == PAGE_SEARCH)
+                {
+                    search_category = (search_category + 1) % 4;  // 0-3: All, Games, Demos, Music
+                    // Re-search if we have a query
+                    if (search_query_len >= 2)
+                        do_search(search_query, 0);
                     draw_list("assembly64 - search");
                 }
                 break;
@@ -833,6 +1149,35 @@ int main(void)
                     {
                         settings_cursor--;
                         draw_settings();
+                    }
+                }
+                else if (current_page == PAGE_ADV_SEARCH)
+                {
+                    if (adv_cursor > 0)
+                    {
+                        int old = adv_cursor;
+                        adv_cursor--;
+                        update_adv_cursor(old, adv_cursor);
+                    }
+                }
+                else if (current_page == PAGE_ADV_RESULTS)
+                {
+                    if (cursor > 0)
+                    {
+                        int old = cursor;
+                        cursor--;
+                        update_cursor_at(old, cursor, 2);  // Row offset 2 for adv results
+                    }
+                    else if (offset > 0)
+                    {
+                        // At top of list, go to previous page
+                        int new_offset = offset - 20;
+                        if (new_offset < 0) new_offset = 0;
+                        do_adv_search(new_offset);
+                        // Go to bottom of new page, but max visible is 18
+                        cursor = item_count - 1;
+                        if (cursor > 18) cursor = 18;
+                        draw_adv_results();
                     }
                 }
                 else if (cursor > 0)
@@ -852,11 +1197,59 @@ int main(void)
                         draw_settings();
                     }
                 }
+                else if (current_page == PAGE_ADV_SEARCH)
+                {
+                    if (adv_cursor < ADV_FIELD_COUNT - 1)
+                    {
+                        int old = adv_cursor;
+                        adv_cursor++;
+                        update_adv_cursor(old, adv_cursor);
+                    }
+                }
+                else if (current_page == PAGE_ADV_RESULTS)
+                {
+                    // Max 19 visible items (0-18)
+                    int max_visible = 18;
+                    if (cursor < item_count - 1 && cursor < max_visible)
+                    {
+                        int old = cursor;
+                        cursor++;
+                        update_cursor_at(old, cursor, 2);  // Row offset 2 for adv results
+                    }
+                    else if (offset + item_count < total_count)
+                    {
+                        // At bottom of visible list or at end, go to next page
+                        do_adv_search(offset + 20);
+                        cursor = 0;  // Go to top of new page
+                        draw_adv_results();
+                    }
+                }
                 else if (cursor < item_count - 1)
                 {
                     int old = cursor;
                     cursor++;
                     update_cursor(old, cursor);
+                }
+                break;
+
+            case ' ':  // Space - toggle/cycle in advanced search
+                if (current_page == PAGE_ADV_SEARCH && !adv_editing)
+                {
+                    if (adv_cursor == ADV_FIELD_CAT)
+                    {
+                        adv_category = (adv_category + 1) % 4;
+                        draw_adv_search();
+                    }
+                    else if (adv_cursor == ADV_FIELD_TYPE)
+                    {
+                        adv_type = (adv_type + 1) % 5;
+                        draw_adv_search();
+                    }
+                    else if (adv_cursor == ADV_FIELD_TOP200)
+                    {
+                        adv_top200 = !adv_top200;
+                        draw_adv_search();
+                    }
                 }
                 break;
 
@@ -897,6 +1290,48 @@ int main(void)
                         current_page = PAGE_CATS;
                         draw_list("assembly64 - categories");
                     }
+                }
+                else if (current_page == PAGE_ADV_SEARCH)
+                {
+                    if (adv_editing)
+                    {
+                        // Exit edit mode
+                        adv_editing = false;
+                        draw_adv_search();
+                    }
+                    else if (adv_cursor == ADV_FIELD_TITLE)
+                    {
+                        // Start editing title
+                        adv_editing = true;
+                        adv_edit_pos = strlen(adv_title);
+                        draw_adv_search();
+                    }
+                    else if (adv_cursor == ADV_FIELD_GROUP)
+                    {
+                        // Start editing group
+                        adv_editing = true;
+                        adv_edit_pos = strlen(adv_group);
+                        draw_adv_search();
+                    }
+                    else if (adv_cursor == ADV_FIELD_SEARCH)
+                    {
+                        // Execute search and go to results page
+                        do_adv_search(0);
+                        if (item_count > 0)
+                        {
+                            current_page = PAGE_ADV_RESULTS;
+                            draw_adv_results();
+                        }
+                        else
+                        {
+                            print_status("no results found");
+                        }
+                    }
+                }
+                else if (current_page == PAGE_ADV_RESULTS && item_count > 0)
+                {
+                    // Run selected result
+                    run_entry(item_ids[cursor]);
                 }
                 else if (item_count > 0)
                 {
@@ -951,23 +1386,64 @@ int main(void)
                     load_categories();
                     draw_list("assembly64 - categories");
                 }
+                else if (current_page == PAGE_ADV_SEARCH)
+                {
+                    if (adv_editing)
+                    {
+                        // Delete character from current field
+                        if (adv_cursor == ADV_FIELD_TITLE && strlen(adv_title) > 0)
+                        {
+                            adv_title[strlen(adv_title) - 1] = 0;
+                            draw_adv_search();
+                        }
+                        else if (adv_cursor == ADV_FIELD_GROUP && strlen(adv_group) > 0)
+                        {
+                            adv_group[strlen(adv_group) - 1] = 0;
+                            draw_adv_search();
+                        }
+                    }
+                    else
+                    {
+                        // Go back to categories
+                        load_categories();
+                        draw_list("assembly64 - categories");
+                    }
+                }
+                else if (current_page == PAGE_ADV_RESULTS)
+                {
+                    // Go back to advanced search form
+                    current_page = PAGE_ADV_SEARCH;
+                    draw_adv_search();
+                }
                 break;
 
-            case 'n':  // Next page (list view only)
+            case 'n':  // Next page
                 if (current_page == PAGE_LIST && offset + item_count < total_count)
                 {
                     load_entries(current_category, offset + 20);
                     draw_list(title);
                 }
+                else if (current_page == PAGE_ADV_RESULTS && offset + item_count < total_count)
+                {
+                    do_adv_search(offset + 20);
+                    draw_adv_results();
+                }
                 break;
 
-            case 'p':  // Previous page (list view only)
+            case 'p':  // Previous page
                 if (current_page == PAGE_LIST && offset > 0)
                 {
                     int new_offset = offset - 20;
                     if (new_offset < 0) new_offset = 0;
                     load_entries(current_category, new_offset);
                     draw_list(title);
+                }
+                else if (current_page == PAGE_ADV_RESULTS && offset > 0)
+                {
+                    int new_offset = offset - 20;
+                    if (new_offset < 0) new_offset = 0;
+                    do_adv_search(new_offset);
+                    draw_adv_results();
                 }
                 break;
 
@@ -995,6 +1471,25 @@ int main(void)
                         server_host[settings_edit_pos++] = key;
                         server_host[settings_edit_pos] = 0;
                         draw_settings();
+                    }
+                }
+                // Typed character in advanced search edit mode
+                else if (current_page == PAGE_ADV_SEARCH && adv_editing &&
+                         ((key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9') || key == '_'))
+                {
+                    if (adv_cursor == ADV_FIELD_TITLE && strlen(adv_title) < 22)
+                    {
+                        int len = strlen(adv_title);
+                        adv_title[len] = key;
+                        adv_title[len + 1] = 0;
+                        draw_adv_search();
+                    }
+                    else if (adv_cursor == ADV_FIELD_GROUP && strlen(adv_group) < 22)
+                    {
+                        int len = strlen(adv_group);
+                        adv_group[len] = key;
+                        adv_group[len + 1] = 0;
+                        draw_adv_search();
                     }
                 }
                 break;

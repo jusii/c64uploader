@@ -14,12 +14,13 @@ import (
 )
 
 // C64 protocol commands:
-// CATS                    - List categories
-// LIST <cat> <offset> <n> - List n entries from category starting at offset
-// SEARCH <off> <n> <query>- Search entries (query can be multi-word)
-// INFO <id>               - Get entry details
-// RUN <id>                - Download and run entry
-// QUIT                    - Close connection
+// CATS                         - List categories
+// LIST <cat> <offset> <n>      - List n entries from category starting at offset
+// SEARCH <off> <n> <query>     - Search all entries (query can be multi-word)
+// SEARCH <off> <n> <cat> <q>   - Search within category (cat=All for all)
+// INFO <id>                    - Get entry details
+// RUN <id>                     - Download and run entry
+// QUIT                         - Close connection
 
 const (
 	c64ReadTimeout = 5 * time.Minute
@@ -109,13 +110,27 @@ func handleC64Command(line string, index *SearchIndex, apiClient *APIClient, ass
 
 	case "SEARCH":
 		if len(parts) < 4 {
-			return "ERR Usage: SEARCH <offset> <count> <query>\n"
+			return "ERR Usage: SEARCH <offset> <count> [category] <query>\n"
 		}
 		offset, _ := strconv.Atoi(parts[1])
 		count, _ := strconv.Atoi(parts[2])
+		// Check if parts[3] is a known category
+		category := ""
+		queryStart := 3
+		potentialCat := parts[3]
+		for _, cat := range index.CategoryOrder {
+			if strings.EqualFold(cat, potentialCat) {
+				category = cat
+				queryStart = 4
+				break
+			}
+		}
+		if queryStart > len(parts) {
+			return "ERR Usage: SEARCH <offset> <count> [category] <query>\n"
+		}
 		// Query is all remaining parts joined with spaces
-		query := strings.Join(parts[3:], " ")
-		return handleSearch(index, query, offset, count)
+		query := strings.Join(parts[queryStart:], " ")
+		return handleSearch(index, query, category, offset, count)
 
 	case "INFO":
 		if len(parts) < 2 {
@@ -136,6 +151,25 @@ func handleC64Command(line string, index *SearchIndex, apiClient *APIClient, ass
 			return "ERR Invalid ID\n"
 		}
 		return handleRun(index, apiClient, assembly64Path, id)
+
+	case "ADVSEARCH":
+		// ADVSEARCH offset count key=value key=value ...
+		// Keys: cat, title, group, type, top200
+		if len(parts) < 3 {
+			return "ERR Usage: ADVSEARCH <offset> <count> [key=value ...]\n"
+		}
+		offset, _ := strconv.Atoi(parts[1])
+		count, _ := strconv.Atoi(parts[2])
+		// Parse key=value pairs
+		params := make(map[string]string)
+		for i := 3; i < len(parts); i++ {
+			if idx := strings.Index(parts[i], "="); idx > 0 {
+				key := strings.ToLower(parts[i][:idx])
+				value := parts[i][idx+1:]
+				params[key] = value
+			}
+		}
+		return handleAdvSearch(index, params, offset, count)
 
 	case "QUIT":
 		return "QUIT"
@@ -196,15 +230,87 @@ func handleList(index *SearchIndex, category string, offset, count int) string {
 	return b.String()
 }
 
-func handleSearch(index *SearchIndex, query string, offset, count int) string {
+func handleSearch(index *SearchIndex, query string, category string, offset, count int) string {
 	query = strings.ToLower(query)
 	var results []int
 
+	// If category is specified and not "All", filter by category
+	filterByCategory := category != "" && !strings.EqualFold(category, "All")
+
 	for i, entry := range index.Entries {
+		// Skip if category filter is active and doesn't match
+		if filterByCategory && !strings.EqualFold(entry.CategoryName, category) {
+			continue
+		}
 		if strings.Contains(strings.ToLower(entry.Name), query) ||
 			strings.Contains(strings.ToLower(entry.Group), query) {
 			results = append(results, i)
 		}
+	}
+
+	total := len(results)
+	if offset >= total {
+		return fmt.Sprintf("OK 0 %d\n.\n", total)
+	}
+
+	// If count is 0, return all results from offset
+	end := offset + count
+	if count == 0 || end > total {
+		end = total
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("OK %d %d\n", end-offset, total))
+
+	for i := offset; i < end; i++ {
+		idx := results[i]
+		entry := index.Entries[idx]
+		b.WriteString(fmt.Sprintf("%d|%s|%s|%s|%s\n",
+			idx, entry.Name, entry.Group, entry.Year, entry.FileType))
+	}
+	b.WriteString(".\n")
+	return b.String()
+}
+
+func handleAdvSearch(index *SearchIndex, params map[string]string, offset, count int) string {
+	var results []int
+
+	// Extract filter parameters
+	category := params["cat"]
+	title := strings.ToLower(params["title"])
+	group := strings.ToLower(params["group"])
+	fileType := strings.ToLower(params["type"])
+	top200Only := params["top200"] == "1"
+
+	for i, entry := range index.Entries {
+		// Category filter
+		if category != "" && !strings.EqualFold(category, "All") {
+			if !strings.EqualFold(entry.CategoryName, category) {
+				continue
+			}
+		}
+
+		// Title filter (partial match)
+		if title != "" && !strings.Contains(strings.ToLower(entry.Name), title) {
+			continue
+		}
+
+		// Group filter (partial match)
+		if group != "" && !strings.Contains(strings.ToLower(entry.Group), group) {
+			continue
+		}
+
+		// File type filter (exact match)
+		if fileType != "" && !strings.EqualFold(entry.FileType, fileType) {
+			continue
+		}
+
+		// Top200 filter
+		if top200Only && entry.Top200Rank == 0 {
+			continue
+		}
+
+		results = append(results, i)
 	}
 
 	total := len(results)
@@ -276,6 +382,8 @@ func handleRun(index *SearchIndex, apiClient *APIClient, assembly64Path string, 
 		runErr = apiClient.runPRG(fileData)
 	case "crt":
 		runErr = apiClient.runCRT(fileData)
+	case "sid":
+		runErr = apiClient.runSID(fileData)
 	case "d64", "g64", "d71", "d81":
 		runErr = apiClient.runDiskImage(fileData, entry.FileType, entry.Name)
 	default:

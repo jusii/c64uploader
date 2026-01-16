@@ -220,19 +220,23 @@ OK 0 1523
 
 ### 3. SEARCH - Search Entries
 
-The `SEARCH` command performs a case-insensitive substring search across both the `Name` and `Group` fields of all entries.
+The `SEARCH` command performs a case-insensitive substring search across both the `Name` and `Group` fields of entries.
 The query can contain multiple words.
 Results are returned in the order they appear in the database.
+
+An optional category filter can be specified to limit results to a specific category (Games, Demos, Music).
 
 
 #### Syntax
 ```
 SEARCH <offset> <count> <query>
+SEARCH <offset> <count> <category> <query>
 ```
 
 #### Arguments
 - `offset`: Starting index, 0-based
 - `count`: Number of results to return (use 0 to return all from offset)
+- `category`: (Optional) Category to filter by (Games, Demos, Music, or All). If omitted or "All", searches all categories.
 - `query`: Search term (case-insensitive, can be multi-word)
 
 #### Response Format
@@ -284,7 +288,38 @@ OK 5 156
 .
 ```
 
-**Example 3: No matches**
+**Example 3: Search with category filter**
+
+Request:
+```
+SEARCH 0 20 Games ninja
+```
+
+Response:
+```
+OK 3 3
+7|Last Ninja|System 3|1987|d64
+145|Last Ninja 2|System 3|1988|d64
+289|Last Ninja 3|System 3|1991|d64
+.
+```
+
+**Example 4: Search Music category**
+
+Request:
+```
+SEARCH 0 10 Music commando
+```
+
+Response:
+```
+OK 2 2
+50123|Commando|Rob Hubbard||sid
+50456|Commando Remix|Various||sid
+.
+```
+
+**Example 5: No matches**
 
 Request:
 ```
@@ -373,9 +408,10 @@ The behavior depends on the file type:
 
 - **PRG files**: Loaded directly into memory and executed
 - **CRT files**: Cartridge image is mounted
+- **SID files**: Music file is played using the Ultimate's SID player
 - **D64/G64/D71/D81 files**: Disk image is mounted, first program is loaded directly into memory and executed
 
-Supported file types: `prg`, `crt`, `d64`, `g64`, `d71`, `d81`
+Supported file types: `prg`, `crt`, `sid`, `d64`, `g64`, `d71`, `d81`
 
 #### Syntax
 ```
@@ -426,7 +462,112 @@ ERR Invalid ID
 
 ---
 
-### 6. QUIT - Close Connection
+### 6. ADVSEARCH - Advanced Search
+
+The `ADVSEARCH` command performs an advanced search with multiple filter parameters.
+Unlike the simple `SEARCH` command, this allows filtering by category, title, group, file type, and Top200 status using key=value pairs.
+
+#### Syntax
+```
+ADVSEARCH <offset> <count> [key=value ...]
+```
+
+#### Arguments
+- `offset`: Starting index, 0-based
+- `count`: Number of results to return (use 0 to return all from offset)
+- `key=value`: Optional filter parameters (see below)
+
+#### Filter Parameters
+
+| Key | Description | Example |
+|-----|-------------|---------|
+| `cat` | Category filter (Games, Demos, Music, All) | `cat=Games` |
+| `title` | Partial match on title | `title=ninja` |
+| `group` | Partial match on group/publisher | `group=system` |
+| `type` | File type filter (d64, prg, crt, sid) | `type=d64` |
+| `top200` | Show only Top200 entries (1=yes) | `top200=1` |
+
+#### Response Format
+```
+OK <returned_count> <total_count>\n
+<id1>|<name1>|<group1>|<year1>|<type1>\n
+<id2>|<name2>|<group2>|<year2>|<type2>\n
+...\n
+.\n
+```
+
+Same format as `LIST` and `SEARCH` commands.
+
+#### Examples
+
+**Example 1: Search Games containing "ninja" in title**
+
+Request:
+```
+ADVSEARCH 0 20 cat=Games title=ninja
+```
+
+Response:
+```
+OK 3 3
+7|Last Ninja|System 3|1987|d64
+145|Last Ninja 2|System 3|1988|d64
+289|Last Ninja 3|System 3|1991|d64
+.
+```
+
+**Example 2: Search Top200 games only**
+
+Request:
+```
+ADVSEARCH 0 20 cat=Games top200=1
+```
+
+Response:
+```
+OK 20 200
+1|Uridium|Hewson|1986|prg
+2|Paradroid|Hewson|1985|prg
+...
+.
+```
+
+**Example 3: Search for SID files**
+
+Request:
+```
+ADVSEARCH 0 10 type=sid
+```
+
+Response:
+```
+OK 10 50000
+50001|Commando|Rob Hubbard||sid
+50002|Delta|Rob Hubbard||sid
+...
+.
+```
+
+**Example 4: Combined filters**
+
+Request:
+```
+ADVSEARCH 0 20 cat=Games type=prg group=hewson
+```
+
+Response:
+```
+OK 5 5
+1|Uridium|Hewson|1986|prg
+2|Paradroid|Hewson|1985|prg
+...
+.
+```
+
+
+---
+
+### 7. QUIT - Close Connection
 
 The `QUIT` command allows the client to close the connection gracefully.
 After sending the goodbye message, the server immediately closes the TCP connection.

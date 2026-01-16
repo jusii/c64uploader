@@ -25,7 +25,8 @@ const (
 type advancedField int
 
 const (
-	fieldTitle advancedField = iota
+	fieldCategory advancedField = iota
+	fieldTitle
 	fieldGroup
 	fieldLanguage
 	fieldRegion
@@ -201,9 +202,15 @@ func (m Model) handleNormalKeyMsg(msg tea.KeyMsg) (Model, tea.Cmd) {
 		// Enter advanced search mode (only in JSON database mode).
 		if !m.legacyMode {
 			m.mode = modeAdvanced
-			m.activeField = fieldTitle
+			m.activeField = fieldCategory
 			// Copy current query to title field.
 			m.advFieldValues[fieldTitle] = m.searchQuery
+			// Copy current category to advanced search.
+			if m.selectedCategory == "All" {
+				m.advSearch.Category = ""
+			} else {
+				m.advSearch.Category = m.selectedCategory
+			}
 		}
 		return m, nil
 
@@ -345,10 +352,10 @@ func (m *Model) isTextField(field advancedField) bool {
 	return false
 }
 
-// isToggleField returns true if the field is a boolean toggle.
+// isToggleField returns true if the field is a boolean toggle or cycle field.
 func (m *Model) isToggleField(field advancedField) bool {
 	switch field {
-	case fieldTop200Only, fieldIs4kOnly, fieldHasDocs, fieldHasFastload, fieldCracked:
+	case fieldCategory, fieldTop200Only, fieldIs4kOnly, fieldHasDocs, fieldHasFastload, fieldCracked:
 		return true
 	}
 	return false
@@ -357,6 +364,20 @@ func (m *Model) isToggleField(field advancedField) bool {
 // toggleField toggles a boolean field value.
 func (m *Model) toggleField(field advancedField) {
 	switch field {
+	case fieldCategory:
+		// Cycle through categories: "" (All) -> "Games" -> "Demos" -> "Music" -> "".
+		switch m.advSearch.Category {
+		case "":
+			m.advSearch.Category = "Games"
+		case "Games":
+			m.advSearch.Category = "Demos"
+		case "Demos":
+			m.advSearch.Category = "Music"
+		case "Music":
+			m.advSearch.Category = ""
+		default:
+			m.advSearch.Category = ""
+		}
 	case fieldTop200Only:
 		m.advSearch.Top200Only = !m.advSearch.Top200Only
 	case fieldIs4kOnly:
@@ -592,6 +613,7 @@ func (m Model) renderAdvancedSearchForm() string {
 		label string
 		hint  string
 	}{
+		{fieldCategory, "Category", "All/Games/Demos/Music"},
 		{fieldTitle, "Title", "partial match"},
 		{fieldGroup, "Group", "partial match"},
 		{fieldLanguage, "Language", "german, french, english..."},
@@ -648,6 +670,24 @@ func (m Model) renderToggleValue(field advancedField, active bool) string {
 	var isOn bool
 
 	switch field {
+	case fieldCategory:
+		switch m.advSearch.Category {
+		case "":
+			val = "[All]"
+			isOn = false
+		case "Games":
+			val = "[Games]"
+			isOn = true
+		case "Demos":
+			val = "[Demos]"
+			isOn = true
+		case "Music":
+			val = "[Music]"
+			isOn = true
+		default:
+			val = "[All]"
+			isOn = false
+		}
 	case fieldTop200Only:
 		isOn = m.advSearch.Top200Only
 		val = boolToToggle(isOn)
@@ -758,8 +798,8 @@ func (m *Model) applyAdvancedFilters() {
 	as := m.advSearch
 
 	for i, entry := range m.index.Entries {
-		// Category filter (still applies in advanced mode).
-		if m.selectedCategory != "All" && entry.CategoryName != m.selectedCategory {
+		// Category filter from advanced search.
+		if as.Category != "" && entry.CategoryName != as.Category {
 			continue
 		}
 
@@ -915,6 +955,9 @@ func (m *Model) loadSelectedEntry() tea.Cmd {
 			loadErr = m.apiClient.runPRG(data)
 		case "crt":
 			loadErr = m.apiClient.runCRT(data)
+		case "sid":
+			// SID files are handled like PRG files on C64 Ultimate.
+			loadErr = m.apiClient.runSID(data)
 		default:
 			return statusMsg{err: fmt.Errorf("unsupported file type: %s", entry.FileType)}
 		}

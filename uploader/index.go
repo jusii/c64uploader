@@ -32,20 +32,81 @@ func LoadIndexFromJSON(jsonPath, assembly64Path string) (*SearchIndex, error) {
 		CategoryOrder: []string{"All"},
 	}
 
-	foundCategories := make(map[string]bool)
+	loadEntriesFromDB(index, db.Entries, assembly64Path)
 
-	for i, entry := range db.Entries {
+	// Build "All" category with all indices.
+	allIndices := make([]int, len(index.Entries))
+	for i := range allIndices {
+		allIndices[i] = i
+	}
+	index.ByCategory["All"] = allIndices
+
+	slog.Info("Index loaded from JSON", "total_entries", len(index.Entries), "categories", len(index.CategoryOrder)-1)
+	return index, nil
+}
+
+// LoadIndexFromMultipleJSON loads a SearchIndex from multiple JSON database files.
+// Files are loaded in order and entries are merged into a single index.
+func LoadIndexFromMultipleJSON(jsonPaths []string, assembly64Path string) (*SearchIndex, error) {
+	index := &SearchIndex{
+		Entries:       make([]ReleaseEntry, 0, 200000),
+		ByCategory:    make(map[string][]int),
+		CategoryOrder: []string{"All"},
+	}
+
+	foundCategories := make(map[string]bool)
+	_ = foundCategories // Used by loadEntriesFromDB
+
+	for _, jsonPath := range jsonPaths {
+		slog.Info("Loading index from JSON database", "path", jsonPath)
+
+		data, err := os.ReadFile(jsonPath)
+		if err != nil {
+			slog.Warn("Failed to read JSON database, skipping", "path", jsonPath, "error", err)
+			continue
+		}
+
+		var db Database
+		if err := json.Unmarshal(data, &db); err != nil {
+			slog.Warn("Failed to parse JSON database, skipping", "path", jsonPath, "error", err)
+			continue
+		}
+
+		loadEntriesFromDB(index, db.Entries, assembly64Path)
+		slog.Info("Loaded entries from database", "path", jsonPath, "entries", db.TotalEntries)
+	}
+
+	// Build "All" category with all indices.
+	allIndices := make([]int, len(index.Entries))
+	for i := range allIndices {
+		allIndices[i] = i
+	}
+	index.ByCategory["All"] = allIndices
+
+	slog.Info("Index loaded from multiple JSON files", "total_entries", len(index.Entries), "categories", len(index.CategoryOrder)-1)
+	return index, nil
+}
+
+// loadEntriesFromDB loads entries from a Database into a SearchIndex.
+func loadEntriesFromDB(index *SearchIndex, entries []DBEntry, assembly64Path string) {
+	foundCategories := make(map[string]bool)
+	for _, cat := range index.CategoryOrder {
+		foundCategories[cat] = true
+	}
+
+	startIdx := len(index.Entries)
+
+	for _, entry := range entries {
 		// Map DBEntry to ReleaseEntry.
 		releaseEntry := ReleaseEntry{
 			Name:         entry.Title,
 			Group:        entry.Group,
-			Year:         "", // We don't have year in new format
 			Path:         entry.Path,
 			CategoryName: capitalizeFirst(entry.Category),
 			FileType:     entry.FileType,
 			// Compute full path: assembly64Path + path + primaryFile
 			FullPath: filepath.Join(assembly64Path, entry.Path, entry.PrimaryFile),
-			// Extended fields from JSON database.
+			// Extended fields from JSON database (games).
 			ReleaseName: entry.ReleaseName,
 			Language:    entry.Language,
 			Region:      entry.Region,
@@ -54,10 +115,27 @@ func LoadIndexFromJSON(jsonPath, assembly64Path string) (*SearchIndex, error) {
 			Version:     entry.Version,
 			Is4k:        entry.Is4k,
 			Crack:       entry.Crack,
+			// Extended fields (demos).
+			Party:       entry.Party,
+			Competition: entry.Competition,
+			IsOnefile:   entry.IsOnefile,
+			Rating:      entry.Rating,
 		}
-		// Handle Top200Rank pointer.
+		// Handle pointer fields.
 		if entry.Top200Rank != nil {
 			releaseEntry.Top200Rank = *entry.Top200Rank
+		}
+		if entry.Top500Rank != nil {
+			releaseEntry.Top500Rank = *entry.Top500Rank
+		}
+		if entry.Year != nil {
+			releaseEntry.Year = fmt.Sprintf("%d", *entry.Year)
+		}
+		if entry.YearRank != nil {
+			releaseEntry.YearRank = *entry.YearRank
+		}
+		if entry.PartyRank != nil {
+			releaseEntry.PartyRank = *entry.PartyRank
 		}
 
 		index.Entries = append(index.Entries, releaseEntry)
@@ -70,18 +148,9 @@ func LoadIndexFromJSON(jsonPath, assembly64Path string) (*SearchIndex, error) {
 		}
 
 		// Update ByCategory map.
-		index.ByCategory[catName] = append(index.ByCategory[catName], i)
+		idx := startIdx + len(index.Entries) - startIdx - 1
+		index.ByCategory[catName] = append(index.ByCategory[catName], idx)
 	}
-
-	// Build "All" category with all indices.
-	allIndices := make([]int, len(index.Entries))
-	for i := range allIndices {
-		allIndices[i] = i
-	}
-	index.ByCategory["All"] = allIndices
-
-	slog.Info("Index loaded from JSON", "total_entries", len(index.Entries), "categories", len(index.CategoryOrder)-1)
-	return index, nil
 }
 
 // capitalizeFirst capitalizes the first letter of a string.
@@ -108,19 +177,29 @@ type ReleaseEntry struct {
 	FileType     string // "d64", "prg", "crt" - from extension.
 
 	// Extended fields (populated from JSON database, empty in legacy mode).
-	ReleaseName string     // Full release name with crack info.
+	ReleaseName string     // Full release name with crack info (games).
 	Language    string     // german, french, english, etc.
 	Region      string     // PAL, NTSC.
 	Engine      string     // seuck, gkgm, bdck.
 	IsPreview   bool       // True if preview/unfinished.
 	Version     string     // Version string if present.
 	Top200Rank  int        // 1-200 or 0 if not ranked.
-	Is4k        bool       // True if 4k competition entry.
-	Crack       *CrackInfo // Crack/trainer info (nil if not cracked).
+	Top500Rank  int        // 1-500 or 0 if not ranked (demos).
+	Is4k        bool       // True if 4k competition entry (games).
+	Crack       *CrackInfo // Crack/trainer info (nil if not cracked, games only).
+
+	// Demos-specific fields.
+	YearRank    int     // Rank within year's top 20 (demos).
+	Party       string  // Party/event name (demos).
+	PartyRank   int     // Placement at party (demos).
+	Competition string  // Competition type, e.g., "C64 Demo" (demos).
+	IsOnefile   bool    // Single-file demo (demos).
+	Rating      float64 // CSDB rating (demos).
 }
 
 // AdvancedSearch holds criteria for advanced searching.
 type AdvancedSearch struct {
+	Category    string // Category filter: "" (all), "Games", "Demos".
 	Title       string // Search in title.
 	Group       string // Search in group.
 	Language    string // Exact match: german, french, etc.

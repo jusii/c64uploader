@@ -44,12 +44,11 @@ Browse and upload files from local Assembly64 collection to C64 Ultimate using a
 **Options:**
 - `-host <ip>` - C64 Ultimate hostname or IP address (default: `c64u`)
 - `-assembly64 <path>` - Path to Assembly64 collection (default: `~/Downloads/assembly64`)
-- `-db <path>` - Path to JSON database file (default: `<assembly64>/c64uploader.json`)
 - `-legacy` - Force legacy `.releaselog.json` loading instead of JSON database
 - `-v` - Enable verbose debug logging
 
 **Data Sources:**
-- **JSON Database (default)** - Uses `c64uploader.json` database in the assembly64 directory for fast loading and rich metadata. Generate with `dbgen` command.
+- **JSON Database (default)** - Uses `c64uploader_games.json`, `c64uploader_demos.json`, and `c64uploader_music.json` databases in the assembly64 directory for fast loading and rich metadata. Generate with `dbgen` command.
 - **Legacy Mode** - Falls back to scanning `.releaselog.json` metadata files if JSON database not found, or when `-legacy` flag is used.
 
 **Controls:**
@@ -64,11 +63,12 @@ Browse and upload files from local Assembly64 collection to C64 Ultimate using a
 **Advanced Search (press `/`):**
 
 When using the JSON database, press `/` to open an advanced search form with filters for:
+- Category (All/Games/Demos/Music)
 - Title and Group (partial text match)
 - Language (german, french, english...)
 - Region (PAL, NTSC)
 - Engine (seuck, gkgm, bdck...)
-- File type (d64, prg, crt...)
+- File type (d64, prg, crt, sid...)
 - Trainer count (min/max)
 - Top 200 games only
 - 4K competition entries only
@@ -152,7 +152,6 @@ Start the C64 protocol server for the C64 client:
 **Options:**
 - `-host <ip>` - C64 Ultimate hostname or IP address (default: `c64u`)
 - `-assembly64 <path>` - Path to Assembly64 collection (default: `~/Downloads/assembly64`)
-- `-db <path>` - Path to JSON database file (default: `<assembly64>/c64uploader.json`)
 - `-legacy` - Force legacy `.releaselog.json` loading instead of JSON database
 - `-port <port>` - C64 protocol server port (default: `6465`)
 - `-v` - Enable verbose debug logging
@@ -167,7 +166,7 @@ See `uploader/C64PROTOCOL.md` for protocol details.
 
 ### Database Generator
 
-Generate a JSON database from your Assembly64 collection for faster loading and richer search capabilities:
+Generate JSON database files from your Assembly64 collection for faster loading and richer search capabilities:
 
 ```bash
 ./c64uploader dbgen [options]
@@ -175,19 +174,48 @@ Generate a JSON database from your Assembly64 collection for faster loading and 
 
 **Options:**
 - `-assembly64 <path>` - Path to Assembly64 data directory (required)
-- `-out <path>` - Output JSON database file (default: `<assembly64>/c64uploader.json`)
+- `-category <category>` - Category to generate: `games`, `demos`, `music`, or `all` (default: `all`)
 
 **Example:**
 ```bash
+# Generate all category databases
 ./c64uploader dbgen -assembly64 ~/assembly64
+
+# Generate only games database
+./c64uploader dbgen -assembly64 ~/assembly64 -category games
+
+# Generate only demos database
+./c64uploader dbgen -assembly64 ~/assembly64 -category demos
+
+# Generate only music database
+./c64uploader dbgen -assembly64 ~/assembly64 -category music
 ```
 
-The generator scans the `Games/CSDB/All` directory structure and extracts metadata from directory names including:
+This creates separate JSON files per category:
+- `c64uploader_games.json` - Games from `Games/CSDB/All`
+- `c64uploader_demos.json` - Demos from `Demos/CSDB/All`
+- `c64uploader_music.json` - Music from multiple collections (CSDB, HVSC, 2sid, 3sid)
+
+**Games metadata extracted:**
 - Title, group, and release name
 - Crack information (trainers, flags like docs/fastload/highscore)
 - Language, region, and game engine
 - Top 200 ranking (cross-referenced from `Games/CSDB/Top200/`)
 - 4K competition status (cross-referenced from `Games/CSDB/4k/`)
+
+**Demos metadata extracted:**
+- Title and group
+- Top 200/500 ranking
+- Year and year ranking
+- Party, competition, and party placement
+- Onefile status
+- CSDB rating
+
+**Music metadata extracted:**
+- Title and author/composer (from directory structure)
+- Collection source (csdb, hvsc, 2sid, 3sid)
+- Top 200 ranking (CSDB music)
+- Party, competition, and placement (CSDB music)
 
 See `docs/json-database-format.md` for the complete database schema specification.
 

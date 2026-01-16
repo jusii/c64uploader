@@ -99,6 +99,12 @@ func (c *APIClient) runCRT(fileData []byte) error {
 	return c.uploadAndRun("/v1/runners:run_crt", fileData)
 }
 
+// runSID uploads and plays a .sid music file.
+func (c *APIClient) runSID(fileData []byte) error {
+	slog.Info("Uploading and playing .sid file")
+	return c.uploadAndRun("/v1/runners:sidplay", fileData)
+}
+
 // mountDisk mounts a disk image from the filesystem.
 func (c *APIClient) mountDisk(imagePath, imageType string) error {
 	path := fmt.Sprintf("/v1/drives/a:mount?image=%s&type=%s&mode=readonly", url.QueryEscape(imagePath), imageType)

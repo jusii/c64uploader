@@ -148,19 +148,37 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "Run 'c64uploader <command> -help' for command-specific options.\n")
 }
 
-// loadIndex loads the search index, trying JSON database first unless legacy mode is forced.
+// loadIndex loads the search index, trying JSON databases first unless legacy mode is forced.
 // assembly64Path should already be expanded (no ~).
-func loadIndex(assembly64Path, dbPath string, forceLegacy bool) (*SearchIndex, error) {
-	// Try JSON database first (unless legacy mode forced).
-	if !forceLegacy && dbPath != "" {
-		if _, err := os.Stat(dbPath); err == nil {
-			return LoadIndexFromJSON(dbPath, assembly64Path)
-		}
-		slog.Info("JSON database not found, falling back to legacy loading", "path", dbPath)
+// It looks for c64uploader_games.json, c64uploader_demos.json, c64uploader_music.json, etc. and merges them.
+func loadIndex(assembly64Path string, forceLegacy bool) (*SearchIndex, error) {
+	if forceLegacy {
+		// Fall back to legacy .releaselog.json loading.
+		return loadAssembly64Index(assembly64Path)
 	}
 
-	// Fall back to legacy .releaselog.json loading.
-	return loadAssembly64Index(assembly64Path)
+	// Look for category-specific JSON files.
+	categoryFiles := []string{
+		filepath.Join(assembly64Path, "c64uploader_games.json"),
+		filepath.Join(assembly64Path, "c64uploader_demos.json"),
+		filepath.Join(assembly64Path, "c64uploader_music.json"),
+	}
+
+	// Check which files exist.
+	var existingFiles []string
+	for _, f := range categoryFiles {
+		if _, err := os.Stat(f); err == nil {
+			existingFiles = append(existingFiles, f)
+		}
+	}
+
+	if len(existingFiles) == 0 {
+		slog.Info("No JSON database files found, falling back to legacy loading")
+		return loadAssembly64Index(assembly64Path)
+	}
+
+	// Load from multiple JSON files.
+	return LoadIndexFromMultipleJSON(existingFiles, assembly64Path)
 }
 
 func runTUI(args []string) {
@@ -168,7 +186,6 @@ func runTUI(args []string) {
 	host := fs.String("host", "c64u", "C64 Ultimate hostname or IP address")
 	verbose := fs.Bool("v", false, "Enable verbose debug logging")
 	assembly64Path := fs.String("assembly64", "~/Downloads/assembly64", "Path to Assembly64 data directory")
-	dbPath := fs.String("db", "", "Path to JSON database file (default: <assembly64>/c64uploader.json)")
 	legacy := fs.Bool("legacy", false, "Force legacy .releaselog.json loading")
 	fs.Parse(args)
 
@@ -187,22 +204,23 @@ func runTUI(args []string) {
 		a64Path = filepath.Join(home, a64Path[2:])
 	}
 
-	// Compute default database path if not specified.
-	dbFile := *dbPath
-	if dbFile == "" {
-		dbFile = filepath.Join(a64Path, "c64uploader.json")
-	}
-
-	index, err := loadIndex(a64Path, dbFile, *legacy)
+	index, err := loadIndex(a64Path, *legacy)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: Failed to load index: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Determine if we're in legacy mode (JSON not found or -legacy flag).
+	// Determine if we're in legacy mode (no JSON files found or -legacy flag).
 	legacyMode := *legacy
 	if !legacyMode {
-		if _, err := os.Stat(dbFile); os.IsNotExist(err) {
+		// Check if any JSON database files exist.
+		gamesFile := filepath.Join(a64Path, "c64uploader_games.json")
+		demosFile := filepath.Join(a64Path, "c64uploader_demos.json")
+		musicFile := filepath.Join(a64Path, "c64uploader_music.json")
+		_, gamesErr := os.Stat(gamesFile)
+		_, demosErr := os.Stat(demosFile)
+		_, musicErr := os.Stat(musicFile)
+		if os.IsNotExist(gamesErr) && os.IsNotExist(demosErr) && os.IsNotExist(musicErr) {
 			legacyMode = true
 		}
 	}
@@ -392,7 +410,6 @@ func runServer(args []string) {
 	host := fs.String("host", "c64u", "C64 Ultimate hostname or IP address")
 	verbose := fs.Bool("v", false, "Enable verbose debug logging")
 	assembly64Path := fs.String("assembly64", "~/Downloads/assembly64", "Path to Assembly64 data directory")
-	dbPath := fs.String("db", "", "Path to JSON database file (default: <assembly64>/c64uploader.json)")
 	legacy := fs.Bool("legacy", false, "Force legacy .releaselog.json loading")
 	port := fs.Int("port", 6465, "C64 protocol server port")
 	fs.Parse(args)
@@ -409,13 +426,7 @@ func runServer(args []string) {
 		a64Path = filepath.Join(home, a64Path[2:])
 	}
 
-	// Compute default database path if not specified.
-	dbFile := *dbPath
-	if dbFile == "" {
-		dbFile = filepath.Join(a64Path, "c64uploader.json")
-	}
-
-	index, err := loadIndex(a64Path, dbFile, *legacy)
+	index, err := loadIndex(a64Path, *legacy)
 	if err != nil {
 		slog.Error("Failed to load index", "error", err)
 		os.Exit(1)
@@ -437,12 +448,12 @@ func runServer(args []string) {
 func runDBGen(args []string) {
 	fs := flag.NewFlagSet("dbgen", flag.ExitOnError)
 	assembly64Path := fs.String("assembly64", "", "Path to Assembly64 data directory (required)")
-	outputPath := fs.String("out", "", "Output JSON file path (default: <assembly64>/c64uploader.json)")
+	category := fs.String("category", "all", "Category to generate: games, demos, music, or all (default: all)")
 	fs.Parse(args)
 
 	if *assembly64Path == "" {
 		fmt.Fprintf(os.Stderr, "Error: -assembly64 path is required\n")
-		fmt.Fprintf(os.Stderr, "Usage: c64uploader dbgen -assembly64 <path> [-out <file>]\n")
+		fmt.Fprintf(os.Stderr, "Usage: c64uploader dbgen -assembly64 <path> [-category <games|demos|music|all>]\n")
 		fmt.Fprintf(os.Stderr, "Example: c64uploader dbgen -assembly64 ~/assembly64\n")
 		os.Exit(1)
 	}
@@ -464,14 +475,46 @@ func runDBGen(args []string) {
 		os.Exit(1)
 	}
 
-	// Compute default output path if not specified.
-	outFile := *outputPath
-	if outFile == "" {
-		outFile = filepath.Join(path, "c64uploader.json")
+	// Generate databases based on category flag.
+	cat := strings.ToLower(*category)
+	var hasError bool
+
+	if cat == "all" || cat == "games" {
+		gamesFile := filepath.Join(path, "c64uploader_games.json")
+		fmt.Println("=== Generating Games Database ===")
+		if err := GenerateGamesDB(path, gamesFile); err != nil {
+			fmt.Fprintf(os.Stderr, "Error generating games: %v\n", err)
+			hasError = true
+		}
+		fmt.Println()
 	}
 
-	if err := GenerateGamesDB(path, outFile); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	if cat == "all" || cat == "demos" {
+		demosFile := filepath.Join(path, "c64uploader_demos.json")
+		fmt.Println("=== Generating Demos Database ===")
+		if err := GenerateDemosDB(path, demosFile); err != nil {
+			fmt.Fprintf(os.Stderr, "Error generating demos: %v\n", err)
+			hasError = true
+		}
+		fmt.Println()
+	}
+
+	if cat == "all" || cat == "music" {
+		musicFile := filepath.Join(path, "c64uploader_music.json")
+		fmt.Println("=== Generating Music Database ===")
+		if err := GenerateMusicDB(path, musicFile); err != nil {
+			fmt.Fprintf(os.Stderr, "Error generating music: %v\n", err)
+			hasError = true
+		}
+		fmt.Println()
+	}
+
+	if cat != "all" && cat != "games" && cat != "demos" && cat != "music" {
+		fmt.Fprintf(os.Stderr, "Error: unknown category '%s'. Use: games, demos, music, or all\n", *category)
+		os.Exit(1)
+	}
+
+	if hasError {
 		os.Exit(1)
 	}
 }

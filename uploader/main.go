@@ -169,6 +169,21 @@ func loadIndex(assembly64Path string, forceLegacy bool) (*SearchIndex, error) {
 	demosFiles, _ := filepath.Glob(demosPattern)
 	existingFiles = append(existingFiles, demosFiles...)
 
+	// Look for intros files
+	introsPattern := filepath.Join(assembly64Path, "c64uploader_intros*.json")
+	introsFiles, _ := filepath.Glob(introsPattern)
+	existingFiles = append(existingFiles, introsFiles...)
+
+	// Look for graphics files
+	graphicsPattern := filepath.Join(assembly64Path, "c64uploader_graphics*.json")
+	graphicsFiles, _ := filepath.Glob(graphicsPattern)
+	existingFiles = append(existingFiles, graphicsFiles...)
+
+	// Look for discmags files
+	discmagsPattern := filepath.Join(assembly64Path, "c64uploader_discmags*.json")
+	discmagsFiles, _ := filepath.Glob(discmagsPattern)
+	existingFiles = append(existingFiles, discmagsFiles...)
+
 	// Look for music files
 	musicPattern := filepath.Join(assembly64Path, "c64uploader_music*.json")
 	musicFiles, _ := filepath.Glob(musicPattern)
@@ -220,8 +235,11 @@ func runTUI(args []string) {
 		// Check if any JSON database files exist using glob patterns.
 		gamesFiles, _ := filepath.Glob(filepath.Join(a64Path, "c64uploader_games*.json"))
 		demosFiles, _ := filepath.Glob(filepath.Join(a64Path, "c64uploader_demos*.json"))
+		introsFiles, _ := filepath.Glob(filepath.Join(a64Path, "c64uploader_intros*.json"))
+		graphicsFiles, _ := filepath.Glob(filepath.Join(a64Path, "c64uploader_graphics*.json"))
+		discmagsFiles, _ := filepath.Glob(filepath.Join(a64Path, "c64uploader_discmags*.json"))
 		musicFiles, _ := filepath.Glob(filepath.Join(a64Path, "c64uploader_music*.json"))
-		if len(gamesFiles) == 0 && len(demosFiles) == 0 && len(musicFiles) == 0 {
+		if len(gamesFiles) == 0 && len(demosFiles) == 0 && len(introsFiles) == 0 && len(graphicsFiles) == 0 && len(discmagsFiles) == 0 && len(musicFiles) == 0 {
 			legacyMode = true
 		}
 	}
@@ -449,17 +467,20 @@ func runServer(args []string) {
 func runDBGen(args []string) {
 	fs := flag.NewFlagSet("dbgen", flag.ExitOnError)
 	assembly64Path := fs.String("assembly64", "", "Path to Assembly64 data directory (required)")
-	category := fs.String("category", "all", "Category to generate: games, demos, music, or all (default: all)")
-	source := fs.String("source", "csdb", "Source collection (applies to games and demos categories)")
+	category := fs.String("category", "all", "Category to generate: games, demos, intros, graphics, discmags, music, or all (default: all)")
+	source := fs.String("source", "csdb", "Source collection (applies to games, demos, and intros categories)")
 	fs.Parse(args)
 
 	if *assembly64Path == "" {
 		fmt.Fprintf(os.Stderr, "Error: -assembly64 path is required\n")
-		fmt.Fprintf(os.Stderr, "Usage: c64uploader dbgen -assembly64 <path> [-category <games|demos|music|all>] [-source <source>]\n")
+		fmt.Fprintf(os.Stderr, "Usage: c64uploader dbgen -assembly64 <path> [-category <games|demos|intros|graphics|discmags|music|all>] [-source <source>]\n")
 		fmt.Fprintf(os.Stderr, "Example: c64uploader dbgen -assembly64 ~/assembly64\n")
 		fmt.Fprintf(os.Stderr, "Example: c64uploader dbgen -assembly64 ~/assembly64 -category games -source c64com\n")
 		fmt.Fprintf(os.Stderr, "\nGames sources: csdb, c64com, gamebase, guybrush, guybrush-german, oneload64, mayhem-crt, c64tapes, preservers, seuck, all\n")
 		fmt.Fprintf(os.Stderr, "Demos sources: csdb, c64com, guybrush, all\n")
+		fmt.Fprintf(os.Stderr, "Intros sources: csdb, c64org, all\n")
+		fmt.Fprintf(os.Stderr, "Graphics sources: csdb\n")
+		fmt.Fprintf(os.Stderr, "Discmags sources: csdb\n")
 		os.Exit(1)
 	}
 
@@ -621,6 +642,49 @@ func runDBGen(args []string) {
 		}
 	}
 
+	if cat == "all" || cat == "intros" {
+		// Generate intros databases based on source.
+		if src == "all" || src == "csdb" {
+			introsFile := filepath.Join(path, "c64uploader_intros.json")
+			fmt.Println("=== Generating Intros Database (CSDB) ===")
+			if err := GenerateIntrosDB(path, introsFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Error generating CSDB intros: %v\n", err)
+				hasError = true
+			}
+			fmt.Println()
+		}
+
+		if src == "all" || src == "c64org" {
+			introsFile := filepath.Join(path, "c64uploader_intros_c64org.json")
+			fmt.Println("=== Generating Intros Database (C64org) ===")
+			if err := GenerateC64orgIntrosDB(path, introsFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Error generating C64org intros: %v\n", err)
+				hasError = true
+			}
+			fmt.Println()
+		}
+	}
+
+	if cat == "all" || cat == "graphics" {
+		graphicsFile := filepath.Join(path, "c64uploader_graphics.json")
+		fmt.Println("=== Generating Graphics Database (CSDB) ===")
+		if err := GenerateGraphicsDB(path, graphicsFile); err != nil {
+			fmt.Fprintf(os.Stderr, "Error generating graphics: %v\n", err)
+			hasError = true
+		}
+		fmt.Println()
+	}
+
+	if cat == "all" || cat == "discmags" {
+		discmagsFile := filepath.Join(path, "c64uploader_discmags.json")
+		fmt.Println("=== Generating Discmags Database (CSDB) ===")
+		if err := GenerateDiscmagsDB(path, discmagsFile); err != nil {
+			fmt.Fprintf(os.Stderr, "Error generating discmags: %v\n", err)
+			hasError = true
+		}
+		fmt.Println()
+	}
+
 	if cat == "all" || cat == "music" {
 		musicFile := filepath.Join(path, "c64uploader_music.json")
 		fmt.Println("=== Generating Music Database ===")
@@ -631,8 +695,8 @@ func runDBGen(args []string) {
 		fmt.Println()
 	}
 
-	if cat != "all" && cat != "games" && cat != "demos" && cat != "music" {
-		fmt.Fprintf(os.Stderr, "Error: unknown category '%s'. Use: games, demos, music, or all\n", *category)
+	if cat != "all" && cat != "games" && cat != "demos" && cat != "intros" && cat != "graphics" && cat != "discmags" && cat != "music" {
+		fmt.Fprintf(os.Stderr, "Error: unknown category '%s'. Use: games, demos, intros, graphics, discmags, music, or all\n", *category)
 		os.Exit(1)
 	}
 

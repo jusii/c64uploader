@@ -2130,6 +2130,356 @@ func GenerateGuybrushDemosDB(basePath, outputPath string) error {
 	return GenerateDemosCollectionDB(basePath, outputPath, "guybrush", "Demos/Guybrush", scanSimpleDemosCollection)
 }
 
+// scanIntrosCollection scans an intros collection with Letter/Group structure.
+// Files are directly in the group folder.
+func scanIntrosCollection(basePath, collectionPath, sourceName string) ([]DBEntry, error) {
+	var entries []DBEntry
+	entryID := 1
+
+	fullPath := filepath.Join(basePath, collectionPath)
+
+	err := filepath.WalkDir(fullPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		if !d.IsDir() {
+			return nil
+		}
+
+		rel, _ := filepath.Rel(fullPath, path)
+		if rel == "." {
+			return nil
+		}
+
+		parts := strings.Split(rel, string(os.PathSeparator))
+
+		// We want group folders at level 2: Letter/Group
+		if len(parts) != 2 {
+			return nil
+		}
+
+		group := parts[1] // Group folder (also used as title for intros)
+
+		// Scan the folder for files.
+		files, primaryFile, fileType := scanReleaseFolder(path)
+		if len(files) == 0 {
+			return nil
+		}
+
+		// Build the relative path from assembly64 root.
+		relPath := filepath.Join(collectionPath, rel)
+
+		entry := DBEntry{
+			ID:          entryID,
+			Category:    "intros",
+			Title:       group, // Use group name as title for intros
+			Group:       group,
+			Path:        relPath,
+			Files:       files,
+			PrimaryFile: primaryFile,
+			FileType:    fileType,
+		}
+
+		entries = append(entries, entry)
+		entryID++
+
+		if entryID%1000 == 0 {
+			fmt.Printf("  Processed %d entries...\n", entryID-1)
+		}
+
+		return nil
+	})
+
+	return entries, err
+}
+
+// GenerateIntrosDB generates the main intros database (CSDB).
+func GenerateIntrosDB(basePath, outputPath string) error {
+	fmt.Println("Scanning Intros/CSDB-intros...")
+
+	entries, err := scanIntrosCollection(basePath, "Intros/CSDB-intros", "csdb")
+	if err != nil {
+		return fmt.Errorf("failed to scan directory: %w", err)
+	}
+
+	fmt.Printf("  Total entries: %d\n", len(entries))
+
+	if len(entries) == 0 {
+		fmt.Println("  No entries found, skipping file generation")
+		return nil
+	}
+
+	db := Database{
+		Version:      "1.0",
+		Generated:    time.Now().UTC().Format(time.RFC3339),
+		Source:       "csdb",
+		TotalEntries: len(entries),
+		Entries:      entries,
+	}
+
+	fmt.Printf("Writing %s...\n", outputPath)
+
+	jsonData, err := json.Marshal(db)
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	if err := os.WriteFile(outputPath, jsonData, 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	fmt.Printf("Done! Generated %s (%d bytes, %d entries)\n", outputPath, len(jsonData), len(entries))
+
+	return nil
+}
+
+// GenerateC64orgIntrosDB generates the C64org intros database.
+func GenerateC64orgIntrosDB(basePath, outputPath string) error {
+	fmt.Println("Scanning Intros/C64org-intros...")
+
+	entries, err := scanIntrosCollection(basePath, "Intros/C64org-intros", "c64org")
+	if err != nil {
+		return fmt.Errorf("failed to scan directory: %w", err)
+	}
+
+	fmt.Printf("  Total entries: %d\n", len(entries))
+
+	if len(entries) == 0 {
+		fmt.Println("  No entries found, skipping file generation")
+		return nil
+	}
+
+	db := Database{
+		Version:      "1.0",
+		Generated:    time.Now().UTC().Format(time.RFC3339),
+		Source:       "c64org",
+		TotalEntries: len(entries),
+		Entries:      entries,
+	}
+
+	fmt.Printf("Writing %s...\n", outputPath)
+
+	jsonData, err := json.Marshal(db)
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	if err := os.WriteFile(outputPath, jsonData, 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	fmt.Printf("Done! Generated %s (%d bytes, %d entries)\n", outputPath, len(jsonData), len(entries))
+
+	return nil
+}
+
+// scanGraphicsCollection scans a graphics collection with All/Letter/Title structure.
+func scanGraphicsCollection(basePath, collectionPath, sourceName string) ([]DBEntry, error) {
+	var entries []DBEntry
+	entryID := 1
+
+	fullPath := filepath.Join(basePath, collectionPath, "All")
+
+	err := filepath.WalkDir(fullPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		if !d.IsDir() {
+			return nil
+		}
+
+		rel, _ := filepath.Rel(fullPath, path)
+		if rel == "." {
+			return nil
+		}
+
+		parts := strings.Split(rel, string(os.PathSeparator))
+
+		// We want title folders at level 2: Letter/Title
+		if len(parts) != 2 {
+			return nil
+		}
+
+		title := parts[1] // Title folder
+
+		// Scan the folder for files.
+		files, primaryFile, fileType := scanReleaseFolder(path)
+		if len(files) == 0 {
+			return nil
+		}
+
+		// Build the relative path from assembly64 root.
+		relPath := filepath.Join(collectionPath, "All", rel)
+
+		entry := DBEntry{
+			ID:          entryID,
+			Category:    "graphics",
+			Title:       title,
+			Group:       sourceName,
+			Path:        relPath,
+			Files:       files,
+			PrimaryFile: primaryFile,
+			FileType:    fileType,
+		}
+
+		entries = append(entries, entry)
+		entryID++
+
+		if entryID%1000 == 0 {
+			fmt.Printf("  Processed %d entries...\n", entryID-1)
+		}
+
+		return nil
+	})
+
+	return entries, err
+}
+
+// GenerateGraphicsDB generates the graphics database (CSDB).
+func GenerateGraphicsDB(basePath, outputPath string) error {
+	fmt.Println("Scanning Graphics/CSDB/All...")
+
+	entries, err := scanGraphicsCollection(basePath, "Graphics/CSDB", "csdb")
+	if err != nil {
+		return fmt.Errorf("failed to scan directory: %w", err)
+	}
+
+	fmt.Printf("  Total entries: %d\n", len(entries))
+
+	if len(entries) == 0 {
+		fmt.Println("  No entries found, skipping file generation")
+		return nil
+	}
+
+	db := Database{
+		Version:      "1.0",
+		Generated:    time.Now().UTC().Format(time.RFC3339),
+		Source:       "csdb",
+		TotalEntries: len(entries),
+		Entries:      entries,
+	}
+
+	fmt.Printf("Writing %s...\n", outputPath)
+
+	jsonData, err := json.Marshal(db)
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	if err := os.WriteFile(outputPath, jsonData, 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	fmt.Printf("Done! Generated %s (%d bytes, %d entries)\n", outputPath, len(jsonData), len(entries))
+
+	return nil
+}
+
+// scanDiscmagsCollection scans a discmags collection with Letter/Title structure.
+func scanDiscmagsCollection(basePath, collectionPath, sourceName string) ([]DBEntry, error) {
+	var entries []DBEntry
+	entryID := 1
+
+	fullPath := filepath.Join(basePath, collectionPath)
+
+	err := filepath.WalkDir(fullPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		if !d.IsDir() {
+			return nil
+		}
+
+		rel, _ := filepath.Rel(fullPath, path)
+		if rel == "." {
+			return nil
+		}
+
+		parts := strings.Split(rel, string(os.PathSeparator))
+
+		// We want title folders at level 2: Letter/Title
+		if len(parts) != 2 {
+			return nil
+		}
+
+		title := parts[1] // Title folder
+
+		// Scan the folder for files.
+		files, primaryFile, fileType := scanReleaseFolder(path)
+		if len(files) == 0 {
+			return nil
+		}
+
+		// Build the relative path from assembly64 root.
+		relPath := filepath.Join(collectionPath, rel)
+
+		entry := DBEntry{
+			ID:          entryID,
+			Category:    "discmags",
+			Title:       title,
+			Group:       sourceName,
+			Path:        relPath,
+			Files:       files,
+			PrimaryFile: primaryFile,
+			FileType:    fileType,
+		}
+
+		entries = append(entries, entry)
+		entryID++
+
+		if entryID%1000 == 0 {
+			fmt.Printf("  Processed %d entries...\n", entryID-1)
+		}
+
+		return nil
+	})
+
+	return entries, err
+}
+
+// GenerateDiscmagsDB generates the discmags database (CSDB).
+func GenerateDiscmagsDB(basePath, outputPath string) error {
+	fmt.Println("Scanning Discmags/CSDB...")
+
+	entries, err := scanDiscmagsCollection(basePath, "Discmags/CSDB", "csdb")
+	if err != nil {
+		return fmt.Errorf("failed to scan directory: %w", err)
+	}
+
+	fmt.Printf("  Total entries: %d\n", len(entries))
+
+	if len(entries) == 0 {
+		fmt.Println("  No entries found, skipping file generation")
+		return nil
+	}
+
+	db := Database{
+		Version:      "1.0",
+		Generated:    time.Now().UTC().Format(time.RFC3339),
+		Source:       "csdb",
+		TotalEntries: len(entries),
+		Entries:      entries,
+	}
+
+	fmt.Printf("Writing %s...\n", outputPath)
+
+	jsonData, err := json.Marshal(db)
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	if err := os.WriteFile(outputPath, jsonData, 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	fmt.Printf("Done! Generated %s (%d bytes, %d entries)\n", outputPath, len(jsonData), len(entries))
+
+	return nil
+}
+
 // GenerateMusicDB generates the music JSON database file.
 func GenerateMusicDB(basePath, outputPath string) error {
 	fmt.Println("Scanning Music collections...")

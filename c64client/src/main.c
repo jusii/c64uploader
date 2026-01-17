@@ -44,7 +44,7 @@ static bool connected = false;
 static char item_names[MAX_ITEMS][32];
 static int  item_ids[MAX_ITEMS];
 static int  item_count = 0;
-static int  total_count = 0;
+static long total_count = 0;
 static int  cursor = 0;
 static int  offset = 0;
 static int  current_page = PAGE_CATS;
@@ -348,7 +348,7 @@ void load_entries(const char *category, int start)
     int n = atoi(p);
     p = strchr(p, ' ');
     if (p)
-        total_count = atoi(p + 1);
+        total_count = atol(p + 1);
 
     item_count = 0;
     offset = start;
@@ -424,7 +424,7 @@ void do_search(const char *query, int start)
     int n = atoi(p);
     p = strchr(p, ' ');
     if (p)
-        total_count = atoi(p + 1);
+        total_count = atol(p + 1);
 
     item_count = 0;
     offset = start;
@@ -518,7 +518,7 @@ void do_adv_search(int start)
     int n = atoi(p);
     p = strchr(p, ' ');
     if (p)
-        total_count = atoi(p + 1);
+        total_count = atol(p + 1);
 
     item_count = 0;
     offset = start;
@@ -615,7 +615,7 @@ void do_releases(const char *category, const char *title, int start)
     int n = atoi(p);
     p = strchr(p, ' ');
     if (p)
-        total_count = atoi(p + 1);
+        total_count = atol(p + 1);
 
     item_count = 0;
     offset = start;
@@ -737,16 +737,6 @@ bool fetch_info(int id)
 // Keyboard input
 //-----------------------------------------------------------------------------
 
-// Debug: show key info on status line
-void debug_key(byte k, bool shift)
-{
-    char buf[32];
-    // Also show what keyb_codes returns
-    char c = (k < 64) ? keyb_codes[shift ? k + 64 : k] : '?';
-    sprintf(buf, "k=%02x c=%02x", k, c);
-    print_at(28, 24, buf);
-}
-
 char get_key(void)
 {
     keyb_poll();
@@ -756,9 +746,6 @@ char get_key(void)
         // Strip both DOWN (0x80) and SHIFT (0x40) qualifiers to get base scancode
         byte k = keyb_key & 0x3f;
         bool shift = (keyb_key & KSCAN_QUAL_SHIFT) != 0;
-
-        // Debug output
-        debug_key(k, shift);
 
         // Always handle these
         if (k == KSCAN_RETURN) return '\r';
@@ -778,12 +765,12 @@ char get_key(void)
         // In list view
         else if (current_page == PAGE_LIST)
         {
-            if (k == KSCAN_W) return 'u';
-            if (k == KSCAN_CSR_DOWN && shift) return 'u';
+            if (k == KSCAN_W || (k == KSCAN_CSR_DOWN && shift)) return 'u';
             if (k == KSCAN_S || k == KSCAN_CSR_DOWN) return 'd';
             if (k == KSCAN_N) return 'n';
             if (k == KSCAN_P) return 'p';
             if (k == KSCAN_I) return 'i';  // Info
+            if (k == KSCAN_CSR_RIGHT && !shift) return '\r';  // Right = run entry
             if (k == KSCAN_CSR_RIGHT && shift) return 8;  // Left = back
         }
         // In search mode
@@ -795,12 +782,15 @@ char get_key(void)
             // Tab = cycle category filter (C= key, scancode 0x0F)
             if (k == 0x0F) return '\t';  // C= key for tab (cycle category)
 
-            // Cursor navigation only when we have results
+            // Navigation keys - always available when we have results
             if (item_count > 0)
             {
-                if (k == KSCAN_CSR_DOWN && shift) return 'u';
-                if (k == KSCAN_CSR_DOWN) return 'd';
+                if (k == KSCAN_W || (k == KSCAN_CSR_DOWN && shift)) return 'u';
+                if (k == KSCAN_S || k == KSCAN_CSR_DOWN) return 'd';
+                if (k == KSCAN_N) return 'n';
+                if (k == KSCAN_P) return 'p';
                 if (k == KSCAN_I) return 'i';  // Info
+                if (k == KSCAN_CSR_RIGHT && !shift) return '\r';  // Right = run entry
             }
 
             // Return printable character using keyb_codes table
@@ -1460,7 +1450,7 @@ int main(void)
                 }
                 break;
 
-            case 'u':  // Up
+            case 'u':  // Up (W key or cursor up)
                 if (current_page == PAGE_SETTINGS)
                 {
                     if (settings_cursor > 0)
@@ -1516,6 +1506,35 @@ int main(void)
                         draw_releases();
                     }
                 }
+                else if (current_page == PAGE_LIST || current_page == PAGE_SEARCH)
+                {
+                    if (cursor > 0)
+                    {
+                        int old = cursor;
+                        cursor--;
+                        update_cursor(old, cursor);
+                    }
+                    else if (offset > 0)
+                    {
+                        // At top of list, go to previous page
+                        int new_offset = offset - 20;
+                        if (new_offset < 0) new_offset = 0;
+                        if (current_page == PAGE_LIST)
+                        {
+                            load_entries(current_category, new_offset);
+                            cursor = item_count - 1;
+                            if (cursor > LIST_HEIGHT - 1) cursor = LIST_HEIGHT - 1;
+                            draw_list(current_category);
+                        }
+                        else
+                        {
+                            do_search(search_query, new_offset);
+                            cursor = item_count - 1;
+                            if (cursor > LIST_HEIGHT - 1) cursor = LIST_HEIGHT - 1;
+                            draw_list("assembly64 - search");
+                        }
+                    }
+                }
                 else if (cursor > 0)
                 {
                     int old = cursor;
@@ -1524,7 +1543,7 @@ int main(void)
                 }
                 break;
 
-            case 'd':  // Down
+            case 'd':  // Down (S key or cursor down)
                 if (current_page == PAGE_SETTINGS)
                 {
                     if (settings_cursor < 1)  // 2 items: server, save
@@ -1574,6 +1593,33 @@ int main(void)
                         do_releases(releases_category, releases_title, offset + 20);
                         cursor = 0;
                         draw_releases();
+                    }
+                }
+                else if (current_page == PAGE_LIST || current_page == PAGE_SEARCH)
+                {
+                    // Max visible is LIST_HEIGHT - 1 (0 to 17 for 18 items)
+                    int max_visible = LIST_HEIGHT - 1;
+                    if (cursor < item_count - 1 && cursor < max_visible)
+                    {
+                        int old = cursor;
+                        cursor++;
+                        update_cursor(old, cursor);
+                    }
+                    else if (offset + item_count < total_count)
+                    {
+                        // At bottom, go to next page
+                        if (current_page == PAGE_LIST)
+                        {
+                            load_entries(current_category, offset + 20);
+                            cursor = 0;
+                            draw_list(current_category);
+                        }
+                        else
+                        {
+                            do_search(search_query, offset + 20);
+                            cursor = 0;
+                            draw_list("assembly64 - search");
+                        }
                     }
                 }
                 else if (cursor < item_count - 1)
@@ -1810,7 +1856,12 @@ int main(void)
                 if (current_page == PAGE_LIST && offset + item_count < total_count)
                 {
                     load_entries(current_category, offset + 20);
-                    draw_list(title);
+                    draw_list(current_category);
+                }
+                else if (current_page == PAGE_SEARCH && offset + item_count < total_count)
+                {
+                    do_search(search_query, offset + 20);
+                    draw_list("assembly64 - search");
                 }
                 else if (current_page == PAGE_ADV_RESULTS && offset + item_count < total_count)
                 {
@@ -1830,7 +1881,14 @@ int main(void)
                     int new_offset = offset - 20;
                     if (new_offset < 0) new_offset = 0;
                     load_entries(current_category, new_offset);
-                    draw_list(title);
+                    draw_list(current_category);
+                }
+                else if (current_page == PAGE_SEARCH && offset > 0)
+                {
+                    int new_offset = offset - 20;
+                    if (new_offset < 0) new_offset = 0;
+                    do_search(search_query, new_offset);
+                    draw_list("assembly64 - search");
                 }
                 else if (current_page == PAGE_ADV_RESULTS && offset > 0)
                 {

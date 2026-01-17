@@ -102,6 +102,11 @@ When browsing Top 200, search results, or category listings:
 - Press **Enter** to run the selected game/demo/music
 - Press **I** to view detailed information about the entry
 
+**Category browsing** (option 3) groups entries by title:
+- Entries with multiple releases show a **>** indicator
+- Press **>** to see all releases of that title
+- Trainer count is shown as **+N** in green
+
 ### Search
 
 **Simple Search (option 2):**
@@ -114,9 +119,9 @@ When browsing Top 200, search results, or category listings:
 - Available filters: category, title, group, file type, Top200 status
 - Results are grouped by title - entries with multiple releases show a `>` indicator
 
-### Advanced Search Results
+### Grouped Entry Indicators
 
-In advanced search results, entries display additional indicators:
+In category browsing and advanced search results, entries display additional indicators:
 
 | Indicator | Meaning |
 |-----------|---------|
@@ -133,7 +138,7 @@ When expanding a grouped entry (pressing **>**), you see all releases:
 - Shows cracker/release group name
 - Displays trainer count (+N) if available
 - Press **Enter** to run a specific release
-- Press **Del** to go back to search results
+- Press **Del** to go back to the previous list
 
 ### Info Screen
 

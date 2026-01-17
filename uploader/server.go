@@ -102,12 +102,17 @@ func handleC64Command(line string, index *SearchIndex, apiClient *APIClient, ass
 
 	case "LIST":
 		if len(parts) < 4 {
-			return "ERR Usage: LIST <category> <offset> <count>\n"
+			return "ERR Usage: LIST <category> <offset> <count> [grouped=1]\n"
 		}
 		category := parts[1]
 		offset, _ := strconv.Atoi(parts[2])
 		count, _ := strconv.Atoi(parts[3])
-		return handleList(index, category, offset, count)
+		// Check for grouped=1 parameter
+		grouped := false
+		if len(parts) >= 5 && strings.EqualFold(parts[4], "grouped=1") {
+			grouped = true
+		}
+		return handleList(index, category, offset, count, grouped)
 
 	case "SEARCH":
 		if len(parts) < 4 {
@@ -203,7 +208,7 @@ func handleCats(index *SearchIndex) string {
 	return b.String()
 }
 
-func handleList(index *SearchIndex, category string, offset, count int) string {
+func handleList(index *SearchIndex, category string, offset, count int, grouped bool) string {
 	// Find matching category (case-insensitive)
 	var matchedCat string
 	for _, cat := range index.CategoryOrder {
@@ -217,13 +222,70 @@ func handleList(index *SearchIndex, category string, offset, count int) string {
 	}
 
 	entries := index.ByCategory[matchedCat]
-	total := len(entries)
 
+	// If not grouped, return flat list (original behavior)
+	if !grouped {
+		total := len(entries)
+		if offset >= total {
+			return fmt.Sprintf("OK 0 %d\n.\n", total)
+		}
+
+		end := offset + count
+		if count == 0 || end > total {
+			end = total
+		}
+
+		var b strings.Builder
+		b.WriteString(fmt.Sprintf("OK %d %d\n", end-offset, total))
+
+		for i := offset; i < end; i++ {
+			idx := entries[i]
+			entry := index.Entries[idx]
+			// Format: ID|Name|Group|Year|Type
+			b.WriteString(fmt.Sprintf("%d|%s|%s|%s|%s\n",
+				idx, entry.Name, entry.Group, entry.Year, entry.FileType))
+		}
+		b.WriteString(".\n")
+		return b.String()
+	}
+
+	// Grouped mode: group by normalized title
+	seen := make(map[string]int) // normalized title -> index in grouped slice
+	var groupedEntries []groupedEntry
+
+	for _, idx := range entries {
+		entry := index.Entries[idx]
+		norm := normalizeTitle(entry.Name)
+
+		// Get trainer count for this entry
+		trainers := -1
+		if entry.Crack != nil {
+			trainers = entry.Crack.Trainers
+		}
+
+		if existingIdx, ok := seen[norm]; ok {
+			groupedEntries[existingIdx].Count++
+			if trainers > groupedEntries[existingIdx].MaxTrainers {
+				groupedEntries[existingIdx].MaxTrainers = trainers
+			}
+		} else {
+			seen[norm] = len(groupedEntries)
+			groupedEntries = append(groupedEntries, groupedEntry{
+				NormalizedTitle: norm,
+				DisplayTitle:    entry.Name,
+				Category:        matchedCat,
+				FirstID:         idx,
+				Count:           1,
+				MaxTrainers:     trainers,
+			})
+		}
+	}
+
+	total := len(groupedEntries)
 	if offset >= total {
 		return fmt.Sprintf("OK 0 %d\n.\n", total)
 	}
 
-	// If count is 0, return all results from offset
 	end := offset + count
 	if count == 0 || end > total {
 		end = total
@@ -233,11 +295,10 @@ func handleList(index *SearchIndex, category string, offset, count int) string {
 	b.WriteString(fmt.Sprintf("OK %d %d\n", end-offset, total))
 
 	for i := offset; i < end; i++ {
-		idx := entries[i]
-		entry := index.Entries[idx]
-		// Format: ID|Name|Group|Year|Type
-		b.WriteString(fmt.Sprintf("%d|%s|%s|%s|%s\n",
-			idx, entry.Name, entry.Group, entry.Year, entry.FileType))
+		g := groupedEntries[i]
+		// Format: ID|Name|Category|Count|Trainers (same as ADVSEARCH grouped)
+		b.WriteString(fmt.Sprintf("%d|%s|%s|%d|%d\n",
+			g.FirstID, g.DisplayTitle, g.Category, g.Count, g.MaxTrainers))
 	}
 	b.WriteString(".\n")
 	return b.String()

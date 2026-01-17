@@ -20,6 +20,7 @@ import (
 // SEARCH <off> <n> <cat> <q>   - Search within category (cat=All for all)
 // INFO <id>                    - Get entry details
 // RUN <id>                     - Download and run entry
+// RELEASES <off> <n> <title>   - List all releases of a title (for grouped results)
 // QUIT                         - Close connection
 
 const (
@@ -154,7 +155,7 @@ func handleC64Command(line string, index *SearchIndex, apiClient *APIClient, ass
 
 	case "ADVSEARCH":
 		// ADVSEARCH offset count key=value key=value ...
-		// Keys: cat, title, group, type, top200
+		// Keys: cat, title, group, type, top200, grouped
 		if len(parts) < 3 {
 			return "ERR Usage: ADVSEARCH <offset> <count> [key=value ...]\n"
 		}
@@ -170,6 +171,18 @@ func handleC64Command(line string, index *SearchIndex, apiClient *APIClient, ass
 			}
 		}
 		return handleAdvSearch(index, params, offset, count)
+
+	case "RELEASES":
+		// RELEASES offset count category title - List all releases of a specific title
+		if len(parts) < 5 {
+			return "ERR Usage: RELEASES <offset> <count> <category> <title>\n"
+		}
+		offset, _ := strconv.Atoi(parts[1])
+		count, _ := strconv.Atoi(parts[2])
+		category := parts[3]
+		// Title is all remaining parts joined (may contain spaces)
+		title := strings.Join(parts[4:], " ")
+		return handleReleases(index, category, title, offset, count)
 
 	case "QUIT":
 		return "QUIT"
@@ -281,6 +294,7 @@ func handleAdvSearch(index *SearchIndex, params map[string]string, offset, count
 	group := strings.ToLower(params["group"])
 	fileType := strings.ToLower(params["type"])
 	top200Only := params["top200"] == "1"
+	grouped := params["grouped"] == "1"
 
 	for i, entry := range index.Entries {
 		// Category filter
@@ -313,6 +327,11 @@ func handleAdvSearch(index *SearchIndex, params map[string]string, offset, count
 		results = append(results, i)
 	}
 
+	// If grouped mode, aggregate by normalized title
+	if grouped {
+		return handleGroupedResults(index, results, category, offset, count)
+	}
+
 	total := len(results)
 	if offset >= total {
 		return fmt.Sprintf("OK 0 %d\n.\n", total)
@@ -332,6 +351,68 @@ func handleAdvSearch(index *SearchIndex, params map[string]string, offset, count
 		entry := index.Entries[idx]
 		b.WriteString(fmt.Sprintf("%d|%s|%s|%s|%s\n",
 			idx, entry.Name, entry.Group, entry.Year, entry.FileType))
+	}
+	b.WriteString(".\n")
+	return b.String()
+}
+
+// handleGroupedResults groups matching entries by normalized title.
+func handleGroupedResults(index *SearchIndex, results []int, category string, offset, count int) string {
+	// Group by normalized title, preserving order of first occurrence
+	seen := make(map[string]int) // normalized title -> index in grouped slice
+	var grouped []groupedEntry
+
+	for _, idx := range results {
+		entry := index.Entries[idx]
+		norm := normalizeTitle(entry.Name)
+
+		// Get trainer count for this entry (-1 = unknown, 0 = none or non-game)
+		trainers := -1
+		if entry.Crack != nil {
+			trainers = entry.Crack.Trainers
+		}
+
+		if existingIdx, ok := seen[norm]; ok {
+			// Increment count for existing group
+			grouped[existingIdx].Count++
+			// Track max trainers
+			if trainers > grouped[existingIdx].MaxTrainers {
+				grouped[existingIdx].MaxTrainers = trainers
+			}
+		} else {
+			// New group
+			seen[norm] = len(grouped)
+			grouped = append(grouped, groupedEntry{
+				NormalizedTitle: norm,
+				DisplayTitle:    entry.Name,
+				Category:        entry.CategoryName,
+				FirstID:         idx,
+				Count:           1,
+				MaxTrainers:     trainers,
+			})
+		}
+	}
+
+	total := len(grouped)
+	if offset >= total {
+		return fmt.Sprintf("OK 0 %d\n.\n", total)
+	}
+
+	end := offset + count
+	if count == 0 || end > total {
+		end = total
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("OK %d %d\n", end-offset, total))
+
+	for i := offset; i < end; i++ {
+		g := grouped[i]
+		// Format: ID|Name|Category|Count|Trainers
+		// ID is first entry's ID (used for single releases), Count indicates if grouped
+		// Trainers: -1=unknown, 0=none, >0=trainer count
+		b.WriteString(fmt.Sprintf("%d|%s|%s|%d|%d\n",
+			g.FirstID, g.DisplayTitle, g.Category, g.Count, g.MaxTrainers))
 	}
 	b.WriteString(".\n")
 	return b.String()
@@ -412,4 +493,84 @@ func handleRun(index *SearchIndex, apiClient *APIClient, assembly64Path string, 
 // readFile reads a file from disk.
 func readFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+// normalizeTitle normalizes a title for grouping purposes.
+// Removes common suffixes like version numbers, crack info, etc.
+func normalizeTitle(title string) string {
+	t := strings.ToLower(title)
+	// Remove common suffixes in parentheses or brackets
+	for {
+		// Remove trailing (...) or [...]
+		if idx := strings.LastIndex(t, "("); idx > 0 {
+			t = strings.TrimSpace(t[:idx])
+			continue
+		}
+		if idx := strings.LastIndex(t, "["); idx > 0 {
+			t = strings.TrimSpace(t[:idx])
+			continue
+		}
+		break
+	}
+	// Trim spaces and underscores
+	t = strings.TrimRight(t, " _-")
+	return t
+}
+
+// groupedEntry represents a unique title with count of releases.
+type groupedEntry struct {
+	NormalizedTitle string
+	DisplayTitle    string // Original title from first matching entry
+	Category        string
+	FirstID         int // ID of first matching entry (for single releases)
+	Count           int // Number of releases with this title
+	MaxTrainers     int // Maximum trainer count among all releases (-1 = unknown)
+}
+
+// handleReleases returns all releases matching a specific title.
+func handleReleases(index *SearchIndex, category, title string, offset, count int) string {
+	normalizedSearch := normalizeTitle(title)
+	var results []int
+
+	for i, entry := range index.Entries {
+		// Category filter
+		if category != "" && !strings.EqualFold(category, "All") {
+			if !strings.EqualFold(entry.CategoryName, category) {
+				continue
+			}
+		}
+
+		// Match normalized title
+		if normalizeTitle(entry.Name) == normalizedSearch {
+			results = append(results, i)
+		}
+	}
+
+	total := len(results)
+	if offset >= total {
+		return fmt.Sprintf("OK 0 %d\n.\n", total)
+	}
+
+	end := offset + count
+	if count == 0 || end > total {
+		end = total
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("OK %d %d\n", end-offset, total))
+
+	for i := offset; i < end; i++ {
+		idx := results[i]
+		entry := index.Entries[idx]
+		// Get trainer count (-1 = unknown)
+		trainers := -1
+		if entry.Crack != nil {
+			trainers = entry.Crack.Trainers
+		}
+		// Format: ID|Group|Year|Type|Trainers (name omitted since all same title)
+		b.WriteString(fmt.Sprintf("%d|%s|%s|%s|%d\n",
+			idx, entry.Group, entry.Year, entry.FileType, trainers))
+	}
+	b.WriteString(".\n")
+	return b.String()
 }

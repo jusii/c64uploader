@@ -29,7 +29,7 @@ static char server_host[32] = DEFAULT_SERVER_HOST;
 static byte socket_id = 0;
 static bool connected = false;
 
-// Pages: 0=cats, 1=list, 2=search, 3=settings, 4=advsearch, 5=advresults, 6=info
+// Pages: 0=cats, 1=list, 2=search, 3=settings, 4=advsearch, 5=advresults, 6=info, 7=releases
 #define PAGE_CATS        0
 #define PAGE_LIST        1
 #define PAGE_SEARCH      2
@@ -37,6 +37,7 @@ static bool connected = false;
 #define PAGE_ADV_SEARCH  4
 #define PAGE_ADV_RESULTS 5
 #define PAGE_INFO        6
+#define PAGE_RELEASES    7
 
 // Menu/list state
 #define MAX_ITEMS 20
@@ -93,6 +94,15 @@ static int info_return_page = PAGE_CATS;  // Page to return to after info
 static char info_labels[MAX_INFO_LINES][8];   // "NAME", "GROUP", etc.
 static char info_values[MAX_INFO_LINES][32];  // The values
 static int  info_line_count = 0;
+
+// Grouped results state (for advanced search)
+static int  item_counts[MAX_ITEMS];    // Release count per grouped entry
+static char item_cats[MAX_ITEMS][8];   // Category per grouped entry
+static int  item_trainers[MAX_ITEMS];  // Trainer count per entry (-1=unknown, 0=none, >0=count)
+
+// Releases page state
+static char releases_title[32];        // Title being viewed
+static char releases_category[8];      // Category of releases
 
 // VIC chip at $D000
 #define vic (*(struct VIC *)0xd000)
@@ -454,12 +464,12 @@ void do_search(const char *query, int start)
     print_status("ready");
 }
 
-// Execute advanced search
+// Execute advanced search (grouped mode)
 void do_adv_search(int start)
 {
     print_status("searching...");
 
-    // Build command: "ADVSEARCH offset count [key=value ...]"
+    // Build command: "ADVSEARCH offset count [key=value ...] grouped=1"
     char cmd[96];
     sprintf(cmd, "ADVSEARCH %d 20", start);
 
@@ -497,6 +507,9 @@ void do_adv_search(int start)
         strcat(cmd, " top200=1");
     }
 
+    // Enable grouped mode
+    strcat(cmd, " grouped=1");
+
     send_command(cmd);
     read_line();  // "OK n total"
 
@@ -511,13 +524,14 @@ void do_adv_search(int start)
     offset = start;
 
     // Read entry lines until "."
+    // Grouped format: "id|name|category|count|trainers"
     while (item_count < MAX_ITEMS && item_count < n)
     {
         read_line();
         if (line_buffer[0] == '.')
             break;
 
-        // Parse "id|name|group|year|type"
+        // Parse "id|name|category|count|trainers"
         char *id_str = line_buffer;
         char *name = strchr(id_str, '|');
         if (name)
@@ -525,12 +539,137 @@ void do_adv_search(int start)
             *name++ = 0;
             item_ids[item_count] = atoi(id_str);
 
-            // Find end of name (next |)
-            char *end = strchr(name, '|');
-            if (end)
-                *end = 0;
+            // Find category (next |)
+            char *cat = strchr(name, '|');
+            if (cat)
+            {
+                *cat++ = 0;
+                // Find count (next |)
+                char *cnt = strchr(cat, '|');
+                if (cnt)
+                {
+                    *cnt++ = 0;
+                    // Find trainers (next |)
+                    char *trn = strchr(cnt, '|');
+                    if (trn)
+                    {
+                        *trn++ = 0;
+                        item_trainers[item_count] = atoi(trn);
+                    }
+                    else
+                    {
+                        item_trainers[item_count] = -1;
+                    }
+                    item_counts[item_count] = atoi(cnt);
+                    strncpy(item_cats[item_count], cat, 7);
+                    item_cats[item_count][7] = 0;
+                }
+                else
+                {
+                    item_counts[item_count] = 1;
+                    item_cats[item_count][0] = 0;
+                    item_trainers[item_count] = -1;
+                }
+            }
+            else
+            {
+                item_counts[item_count] = 1;
+                item_cats[item_count][0] = 0;
+                item_trainers[item_count] = -1;
+            }
 
             strncpy(item_names[item_count], name, 31);
+            item_names[item_count][31] = 0;
+            item_count++;
+        }
+    }
+
+    // Consume remaining lines until "."
+    while (line_buffer[0] != '.')
+        read_line();
+
+    cursor = 0;
+    print_status("ready");
+}
+
+// Fetch releases for a specific title
+void do_releases(const char *category, const char *title, int start)
+{
+    print_status("loading releases...");
+
+    // Save title and category for display
+    strncpy(releases_title, title, 31);
+    releases_title[31] = 0;
+    strncpy(releases_category, category, 7);
+    releases_category[7] = 0;
+
+    // Build command: "RELEASES offset count category title"
+    char cmd[96];
+    sprintf(cmd, "RELEASES %d 20 %s %s", start, category, title);
+
+    send_command(cmd);
+    read_line();  // "OK n total"
+
+    // Parse "OK n total"
+    char *p = line_buffer + 3;
+    int n = atoi(p);
+    p = strchr(p, ' ');
+    if (p)
+        total_count = atoi(p + 1);
+
+    item_count = 0;
+    offset = start;
+
+    // Read entry lines until "."
+    // Releases format: "id|group|year|type|trainers"
+    while (item_count < MAX_ITEMS && item_count < n)
+    {
+        read_line();
+        if (line_buffer[0] == '.')
+            break;
+
+        // Parse "id|group|year|type|trainers"
+        char *id_str = line_buffer;
+        char *grp = strchr(id_str, '|');
+        if (grp)
+        {
+            *grp++ = 0;
+            item_ids[item_count] = atoi(id_str);
+
+            // Find year (next |)
+            char *year = strchr(grp, '|');
+            if (year)
+            {
+                *year++ = 0;
+                // Find type (next |)
+                char *type = strchr(year, '|');
+                if (type)
+                {
+                    *type++ = 0;
+                    // Find trainers (next |)
+                    char *trn = strchr(type, '|');
+                    if (trn)
+                    {
+                        *trn++ = 0;
+                        item_trainers[item_count] = atoi(trn);
+                    }
+                    else
+                    {
+                        item_trainers[item_count] = -1;
+                    }
+                }
+                else
+                {
+                    item_trainers[item_count] = -1;
+                }
+            }
+            else
+            {
+                item_trainers[item_count] = -1;
+            }
+
+            // Display group name
+            strncpy(item_names[item_count], grp, 31);
             item_names[item_count][31] = 0;
             item_count++;
         }
@@ -731,6 +870,17 @@ char get_key(void)
             if (k == KSCAN_N) return 'n';
             if (k == KSCAN_P) return 'p';
             if (k == KSCAN_I) return 'i';  // Info
+            if (k == KSCAN_CSR_RIGHT && !shift) return '>';  // Right = enter releases
+            if (k == KSCAN_CSR_RIGHT && shift) return 8;  // Left = back
+        }
+        // In releases page
+        else if (current_page == PAGE_RELEASES)
+        {
+            if (k == KSCAN_W || (k == KSCAN_CSR_DOWN && shift)) return 'u';
+            if (k == KSCAN_S || k == KSCAN_CSR_DOWN) return 'd';
+            if (k == KSCAN_N) return 'n';
+            if (k == KSCAN_P) return 'p';
+            if (k == KSCAN_I) return 'i';  // Info
             if (k == KSCAN_CSR_RIGHT && shift) return 8;  // Left = back
         }
         // In info screen - any key returns
@@ -772,6 +922,37 @@ void draw_item_at(int i, bool selected, byte row_offset)
     }
 }
 
+// Draw item for advanced results with grouped indicator and trainer count
+void draw_adv_item_at(int i, bool selected)
+{
+    byte y = i + 2;  // Row offset 2 for adv results
+    clear_line(y);
+    byte color = selected ? 1 : 14;
+
+    if (selected)
+        print_at_color(0, y, ">", 1);
+
+    print_at_color(2, y, item_names[i], color);
+
+    int name_len = strlen(item_names[i]);
+    int x = 2 + name_len + 1;
+
+    // Show trainer count if > 0
+    if (item_trainers[i] > 0)
+    {
+        char trn[6];
+        sprintf(trn, "+%d", item_trainers[i]);
+        print_at_color(x, y, trn, 13);  // Light green
+        x += strlen(trn) + 1;
+    }
+
+    // Show ">" indicator at end for grouped entries (count > 1)
+    if (item_counts[i] > 1)
+    {
+        print_at_color(x, y, ">", 5);  // Green arrow
+    }
+}
+
 // Draw item for normal list pages (row offset 4)
 void draw_item(int i, bool selected)
 {
@@ -792,6 +973,15 @@ void update_cursor_at(int old_cursor, int new_cursor, byte row_offset)
 void update_cursor(int old_cursor, int new_cursor)
 {
     update_cursor_at(old_cursor, new_cursor, 4);
+}
+
+// Update cursor for advanced results (preserves grouped indicator)
+void update_adv_cursor_results(int old_cursor, int new_cursor)
+{
+    if (old_cursor >= 0 && old_cursor < item_count)
+        draw_adv_item_at(old_cursor, false);
+    if (new_cursor >= 0 && new_cursor < item_count)
+        draw_adv_item_at(new_cursor, true);
 }
 
 void draw_list(const char *title)
@@ -998,20 +1188,62 @@ void draw_adv_results(void)
     int max_display = 19;
     for (int i = 0; i < item_count && i < max_display; i++)
     {
-        byte y = i + 2;
-        if (i == cursor)
-        {
-            print_at_color(0, y, ">", 1);  // White
-            print_at_color(2, y, item_names[i], 1);
-        }
-        else
-        {
-            print_at(2, y, item_names[i]);
-        }
+        draw_adv_item_at(i, i == cursor);
     }
 
     // Help line at row 23
-    print_at(0, 23, "w/s:move enter:run i:info del:back");
+    print_at(0, 23, "w/s:move enter:run >:releases i:info del:bk");
+}
+
+// Draw item for releases list with trainer count
+void draw_release_item_at(int i, bool selected)
+{
+    byte y = i + 2;  // Row offset 2 for releases
+    clear_line(y);
+    byte color = selected ? 1 : 14;
+
+    if (selected)
+        print_at_color(0, y, ">", 1);
+
+    print_at_color(2, y, item_names[i], color);
+
+    // Show trainer count if > 0
+    if (item_trainers[i] > 0)
+    {
+        int name_len = strlen(item_names[i]);
+        char trn[6];
+        sprintf(trn, "+%d", item_trainers[i]);
+        print_at_color(2 + name_len + 1, y, trn, 13);  // Light green
+    }
+}
+
+// Update cursor for releases list (preserves trainer indicator)
+void update_releases_cursor(int old_cursor, int new_cursor)
+{
+    if (old_cursor >= 0 && old_cursor < item_count)
+        draw_release_item_at(old_cursor, false);
+    if (new_cursor >= 0 && new_cursor < item_count)
+        draw_release_item_at(new_cursor, true);
+}
+
+void draw_releases(void)
+{
+    clear_screen();
+
+    // Title: "Title - releases"
+    char title[40];
+    sprintf(title, "%s (%d)", releases_title, total_count);
+    print_at_color(0, 0, title, 7);  // Yellow
+
+    // Draw items starting at row 2
+    int max_display = 19;
+    for (int i = 0; i < item_count && i < max_display; i++)
+    {
+        draw_release_item_at(i, i == cursor);
+    }
+
+    // Help line at row 23
+    print_at(0, 23, "w/s:move enter:run i:info del:back n/p:pg");
 }
 
 void draw_info(void)
@@ -1252,7 +1484,7 @@ int main(void)
                     {
                         int old = cursor;
                         cursor--;
-                        update_cursor_at(old, cursor, 2);  // Row offset 2 for adv results
+                        update_adv_cursor_results(old, cursor);
                     }
                     else if (offset > 0)
                     {
@@ -1264,6 +1496,24 @@ int main(void)
                         cursor = item_count - 1;
                         if (cursor > 18) cursor = 18;
                         draw_adv_results();
+                    }
+                }
+                else if (current_page == PAGE_RELEASES)
+                {
+                    if (cursor > 0)
+                    {
+                        int old = cursor;
+                        cursor--;
+                        update_releases_cursor(old, cursor);
+                    }
+                    else if (offset > 0)
+                    {
+                        int new_offset = offset - 20;
+                        if (new_offset < 0) new_offset = 0;
+                        do_releases(releases_category, releases_title, new_offset);
+                        cursor = item_count - 1;
+                        if (cursor > 18) cursor = 18;
+                        draw_releases();
                     }
                 }
                 else if (cursor > 0)
@@ -1300,7 +1550,7 @@ int main(void)
                     {
                         int old = cursor;
                         cursor++;
-                        update_cursor_at(old, cursor, 2);  // Row offset 2 for adv results
+                        update_adv_cursor_results(old, cursor);
                     }
                     else if (offset + item_count < total_count)
                     {
@@ -1308,6 +1558,22 @@ int main(void)
                         do_adv_search(offset + 20);
                         cursor = 0;  // Go to top of new page
                         draw_adv_results();
+                    }
+                }
+                else if (current_page == PAGE_RELEASES)
+                {
+                    int max_visible = 18;
+                    if (cursor < item_count - 1 && cursor < max_visible)
+                    {
+                        int old = cursor;
+                        cursor++;
+                        update_releases_cursor(old, cursor);
+                    }
+                    else if (offset + item_count < total_count)
+                    {
+                        do_releases(releases_category, releases_title, offset + 20);
+                        cursor = 0;
+                        draw_releases();
                     }
                 }
                 else if (cursor < item_count - 1)
@@ -1339,12 +1605,27 @@ int main(void)
                 }
                 break;
 
-            case '>':  // Right arrow - enter category (not run)
+            case '>':  // Right arrow - enter category or releases
                 if (current_page == PAGE_CATS)
                 {
                     strcpy(current_category, item_names[cursor]);
                     load_entries(current_category, 0);
                     draw_list(current_category);
+                }
+                else if (current_page == PAGE_ADV_RESULTS && item_count > 0)
+                {
+                    // Enter releases sub-list if count > 1
+                    if (item_counts[cursor] > 1)
+                    {
+                        do_releases(item_cats[cursor], item_names[cursor], 0);
+                        current_page = PAGE_RELEASES;
+                        draw_releases();
+                    }
+                    else
+                    {
+                        // Single release - just run it
+                        run_entry(item_ids[cursor]);
+                    }
                 }
                 break;
 
@@ -1416,7 +1697,22 @@ int main(void)
                 }
                 else if (current_page == PAGE_ADV_RESULTS && item_count > 0)
                 {
-                    // Run selected result
+                    // If grouped entry with multiple releases, enter releases
+                    if (item_counts[cursor] > 1)
+                    {
+                        do_releases(item_cats[cursor], item_names[cursor], 0);
+                        current_page = PAGE_RELEASES;
+                        draw_releases();
+                    }
+                    else
+                    {
+                        // Single release - run it
+                        run_entry(item_ids[cursor]);
+                    }
+                }
+                else if (current_page == PAGE_RELEASES && item_count > 0)
+                {
+                    // Run selected release
                     run_entry(item_ids[cursor]);
                 }
                 else if (item_count > 0)
@@ -1501,6 +1797,13 @@ int main(void)
                     current_page = PAGE_ADV_SEARCH;
                     draw_adv_search();
                 }
+                else if (current_page == PAGE_RELEASES)
+                {
+                    // Go back to advanced search results
+                    do_adv_search(0);  // Re-run search to restore grouped results
+                    current_page = PAGE_ADV_RESULTS;
+                    draw_adv_results();
+                }
                 break;
 
             case 'n':  // Next page
@@ -1513,6 +1816,11 @@ int main(void)
                 {
                     do_adv_search(offset + 20);
                     draw_adv_results();
+                }
+                else if (current_page == PAGE_RELEASES && offset + item_count < total_count)
+                {
+                    do_releases(releases_category, releases_title, offset + 20);
+                    draw_releases();
                 }
                 break;
 
@@ -1531,11 +1839,18 @@ int main(void)
                     do_adv_search(new_offset);
                     draw_adv_results();
                 }
+                else if (current_page == PAGE_RELEASES && offset > 0)
+                {
+                    int new_offset = offset - 20;
+                    if (new_offset < 0) new_offset = 0;
+                    do_releases(releases_category, releases_title, new_offset);
+                    draw_releases();
+                }
                 break;
 
             case 'i':  // Info
                 if ((current_page == PAGE_LIST || current_page == PAGE_SEARCH ||
-                     current_page == PAGE_ADV_RESULTS) && item_count > 0)
+                     current_page == PAGE_ADV_RESULTS || current_page == PAGE_RELEASES) && item_count > 0)
                 {
                     // Remember where to return
                     info_return_page = current_page;
@@ -1558,6 +1873,8 @@ int main(void)
                         draw_list("assembly64 - search");
                     else if (current_page == PAGE_ADV_RESULTS)
                         draw_adv_results();
+                    else if (current_page == PAGE_RELEASES)
+                        draw_releases();
                 }
                 break;
 

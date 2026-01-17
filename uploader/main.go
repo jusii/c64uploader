@@ -150,32 +150,36 @@ func printUsage() {
 
 // loadIndex loads the search index, trying JSON databases first unless legacy mode is forced.
 // assembly64Path should already be expanded (no ~).
-// It looks for c64uploader_games.json, c64uploader_demos.json, c64uploader_music.json, etc. and merges them.
+// It looks for c64uploader_games.json, c64uploader_games_*.json, c64uploader_demos.json, c64uploader_music.json, etc. and merges them.
 func loadIndex(assembly64Path string, forceLegacy bool) (*SearchIndex, error) {
 	if forceLegacy {
 		// Fall back to legacy .releaselog.json loading.
 		return loadAssembly64Index(assembly64Path)
 	}
 
-	// Look for category-specific JSON files.
-	categoryFiles := []string{
-		filepath.Join(assembly64Path, "c64uploader_games.json"),
-		filepath.Join(assembly64Path, "c64uploader_demos.json"),
-		filepath.Join(assembly64Path, "c64uploader_music.json"),
-	}
-
-	// Check which files exist.
 	var existingFiles []string
-	for _, f := range categoryFiles {
-		if _, err := os.Stat(f); err == nil {
-			existingFiles = append(existingFiles, f)
-		}
-	}
+
+	// Look for games files - both main file and source-specific files (games_csdb.json, games_c64com.json, etc.)
+	gamesPattern := filepath.Join(assembly64Path, "c64uploader_games*.json")
+	gamesFiles, _ := filepath.Glob(gamesPattern)
+	existingFiles = append(existingFiles, gamesFiles...)
+
+	// Look for demos files
+	demosPattern := filepath.Join(assembly64Path, "c64uploader_demos*.json")
+	demosFiles, _ := filepath.Glob(demosPattern)
+	existingFiles = append(existingFiles, demosFiles...)
+
+	// Look for music files
+	musicPattern := filepath.Join(assembly64Path, "c64uploader_music*.json")
+	musicFiles, _ := filepath.Glob(musicPattern)
+	existingFiles = append(existingFiles, musicFiles...)
 
 	if len(existingFiles) == 0 {
 		slog.Info("No JSON database files found, falling back to legacy loading")
 		return loadAssembly64Index(assembly64Path)
 	}
+
+	slog.Info("Loading JSON database files", "count", len(existingFiles), "files", existingFiles)
 
 	// Load from multiple JSON files.
 	return LoadIndexFromMultipleJSON(existingFiles, assembly64Path)
@@ -213,14 +217,11 @@ func runTUI(args []string) {
 	// Determine if we're in legacy mode (no JSON files found or -legacy flag).
 	legacyMode := *legacy
 	if !legacyMode {
-		// Check if any JSON database files exist.
-		gamesFile := filepath.Join(a64Path, "c64uploader_games.json")
-		demosFile := filepath.Join(a64Path, "c64uploader_demos.json")
-		musicFile := filepath.Join(a64Path, "c64uploader_music.json")
-		_, gamesErr := os.Stat(gamesFile)
-		_, demosErr := os.Stat(demosFile)
-		_, musicErr := os.Stat(musicFile)
-		if os.IsNotExist(gamesErr) && os.IsNotExist(demosErr) && os.IsNotExist(musicErr) {
+		// Check if any JSON database files exist using glob patterns.
+		gamesFiles, _ := filepath.Glob(filepath.Join(a64Path, "c64uploader_games*.json"))
+		demosFiles, _ := filepath.Glob(filepath.Join(a64Path, "c64uploader_demos*.json"))
+		musicFiles, _ := filepath.Glob(filepath.Join(a64Path, "c64uploader_music*.json"))
+		if len(gamesFiles) == 0 && len(demosFiles) == 0 && len(musicFiles) == 0 {
 			legacyMode = true
 		}
 	}
@@ -449,12 +450,15 @@ func runDBGen(args []string) {
 	fs := flag.NewFlagSet("dbgen", flag.ExitOnError)
 	assembly64Path := fs.String("assembly64", "", "Path to Assembly64 data directory (required)")
 	category := fs.String("category", "all", "Category to generate: games, demos, music, or all (default: all)")
+	source := fs.String("source", "csdb", "Games source: csdb, c64com, gamebase, guybrush, guybrush-german, oneload64, mayhem-crt, c64tapes, preservers, seuck, or all")
 	fs.Parse(args)
 
 	if *assembly64Path == "" {
 		fmt.Fprintf(os.Stderr, "Error: -assembly64 path is required\n")
-		fmt.Fprintf(os.Stderr, "Usage: c64uploader dbgen -assembly64 <path> [-category <games|demos|music|all>]\n")
+		fmt.Fprintf(os.Stderr, "Usage: c64uploader dbgen -assembly64 <path> [-category <games|demos|music|all>] [-source <source>]\n")
 		fmt.Fprintf(os.Stderr, "Example: c64uploader dbgen -assembly64 ~/assembly64\n")
+		fmt.Fprintf(os.Stderr, "Example: c64uploader dbgen -assembly64 ~/assembly64 -category games -source c64com\n")
+		fmt.Fprintf(os.Stderr, "\nGames sources: csdb, c64com, gamebase, guybrush, guybrush-german, oneload64, mayhem-crt, c64tapes, preservers, seuck, all\n")
 		os.Exit(1)
 	}
 
@@ -477,16 +481,110 @@ func runDBGen(args []string) {
 
 	// Generate databases based on category flag.
 	cat := strings.ToLower(*category)
+	src := strings.ToLower(*source)
 	var hasError bool
 
 	if cat == "all" || cat == "games" {
-		gamesFile := filepath.Join(path, "c64uploader_games.json")
-		fmt.Println("=== Generating Games Database ===")
-		if err := GenerateGamesDB(path, gamesFile); err != nil {
-			fmt.Fprintf(os.Stderr, "Error generating games: %v\n", err)
-			hasError = true
+		// Generate games databases based on source.
+		if src == "all" || src == "csdb" {
+			gamesFile := filepath.Join(path, "c64uploader_games.json")
+			fmt.Println("=== Generating Games Database (CSDB) ===")
+			if err := GenerateGamesDB(path, gamesFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Error generating CSDB games: %v\n", err)
+				hasError = true
+			}
+			fmt.Println()
 		}
-		fmt.Println()
+
+		if src == "all" || src == "c64com" {
+			gamesFile := filepath.Join(path, "c64uploader_games_c64com.json")
+			fmt.Println("=== Generating Games Database (C64com) ===")
+			if err := GenerateC64comDB(path, gamesFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Error generating C64com games: %v\n", err)
+				hasError = true
+			}
+			fmt.Println()
+		}
+
+		if src == "all" || src == "gamebase" {
+			gamesFile := filepath.Join(path, "c64uploader_games_gamebase.json")
+			fmt.Println("=== Generating Games Database (Gamebase) ===")
+			if err := GenerateGamebaseDB(path, gamesFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Error generating Gamebase games: %v\n", err)
+				hasError = true
+			}
+			fmt.Println()
+		}
+
+		if src == "all" || src == "guybrush" {
+			gamesFile := filepath.Join(path, "c64uploader_games_guybrush.json")
+			fmt.Println("=== Generating Games Database (Guybrush) ===")
+			if err := GenerateGuybrushDB(path, gamesFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Error generating Guybrush games: %v\n", err)
+				hasError = true
+			}
+			fmt.Println()
+		}
+
+		if src == "all" || src == "guybrush-german" {
+			gamesFile := filepath.Join(path, "c64uploader_games_guybrush-german.json")
+			fmt.Println("=== Generating Games Database (Guybrush-german) ===")
+			if err := GenerateGuybrushGermanDB(path, gamesFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Error generating Guybrush-german games: %v\n", err)
+				hasError = true
+			}
+			fmt.Println()
+		}
+
+		if src == "all" || src == "oneload64" {
+			gamesFile := filepath.Join(path, "c64uploader_games_oneload64.json")
+			fmt.Println("=== Generating Games Database (OneLoad64) ===")
+			if err := GenerateOneLoad64DB(path, gamesFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Error generating OneLoad64 games: %v\n", err)
+				hasError = true
+			}
+			fmt.Println()
+		}
+
+		if src == "all" || src == "mayhem-crt" {
+			gamesFile := filepath.Join(path, "c64uploader_games_mayhem-crt.json")
+			fmt.Println("=== Generating Games Database (Mayhem-crt) ===")
+			if err := GenerateMayhemCrtDB(path, gamesFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Error generating Mayhem-crt games: %v\n", err)
+				hasError = true
+			}
+			fmt.Println()
+		}
+
+		if src == "all" || src == "c64tapes" {
+			gamesFile := filepath.Join(path, "c64uploader_games_c64tapes.json")
+			fmt.Println("=== Generating Games Database (C64Tapes-org) ===")
+			if err := GenerateC64TapesDB(path, gamesFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Error generating C64Tapes games: %v\n", err)
+				hasError = true
+			}
+			fmt.Println()
+		}
+
+		if src == "all" || src == "preservers" {
+			gamesFile := filepath.Join(path, "c64uploader_games_preservers.json")
+			fmt.Println("=== Generating Games Database (Preservers) ===")
+			if err := GeneratePreserversDB(path, gamesFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Error generating Preservers games: %v\n", err)
+				hasError = true
+			}
+			fmt.Println()
+		}
+
+		if src == "all" || src == "seuck" {
+			gamesFile := filepath.Join(path, "c64uploader_games_seuck.json")
+			fmt.Println("=== Generating Games Database (SEUCK) ===")
+			if err := GenerateSEUCKDB(path, gamesFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Error generating SEUCK games: %v\n", err)
+				hasError = true
+			}
+			fmt.Println()
+		}
 	}
 
 	if cat == "all" || cat == "demos" {

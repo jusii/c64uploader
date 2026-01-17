@@ -1382,6 +1382,539 @@ func scanMusicSidCollection(basePath, collectionName, collectionID string, entri
 	})
 }
 
+// scanSimpleGamesCollection scans a simple games collection with Letter/Title structure.
+// Used for C64com, Guybrush, C64Tapes-org, etc.
+func scanSimpleGamesCollection(basePath, collectionPath, sourceName string) ([]DBEntry, error) {
+	var entries []DBEntry
+	entryID := 1
+
+	fullPath := filepath.Join(basePath, collectionPath)
+
+	err := filepath.WalkDir(fullPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		if !d.IsDir() {
+			return nil
+		}
+
+		rel, _ := filepath.Rel(fullPath, path)
+		if rel == "." {
+			return nil
+		}
+
+		parts := strings.Split(rel, string(os.PathSeparator))
+
+		// We want title folders at level 2: Letter/Title
+		if len(parts) != 2 {
+			return nil
+		}
+
+		title := parts[1] // Title folder
+
+		// Scan the folder for files.
+		files, primaryFile, fileType := scanReleaseFolder(path)
+		if len(files) == 0 {
+			return nil
+		}
+
+		// Build the relative path from assembly64 root.
+		relPath := filepath.Join(collectionPath, rel)
+
+		entry := DBEntry{
+			ID:          entryID,
+			Category:    "games",
+			Title:       title,
+			Group:       sourceName,
+			Path:        relPath,
+			Files:       files,
+			PrimaryFile: primaryFile,
+			FileType:    fileType,
+		}
+
+		entries = append(entries, entry)
+		entryID++
+
+		if entryID%1000 == 0 {
+			fmt.Printf("  Processed %d entries...\n", entryID-1)
+		}
+
+		return nil
+	})
+
+	return entries, err
+}
+
+// scanThreeLevelGamesCollection scans a games collection with Letter/Range/Title structure.
+// Used for Gamebase.
+func scanThreeLevelGamesCollection(basePath, collectionPath, sourceName string) ([]DBEntry, error) {
+	var entries []DBEntry
+	entryID := 1
+
+	fullPath := filepath.Join(basePath, collectionPath)
+
+	err := filepath.WalkDir(fullPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		if !d.IsDir() {
+			return nil
+		}
+
+		rel, _ := filepath.Rel(fullPath, path)
+		if rel == "." {
+			return nil
+		}
+
+		parts := strings.Split(rel, string(os.PathSeparator))
+
+		// We want title folders at level 3: Letter/Range/Title
+		if len(parts) != 3 {
+			return nil
+		}
+
+		title := parts[2] // Title folder
+
+		// Scan the folder for files.
+		files, primaryFile, fileType := scanReleaseFolder(path)
+		if len(files) == 0 {
+			return nil
+		}
+
+		// Build the relative path from assembly64 root.
+		relPath := filepath.Join(collectionPath, rel)
+
+		entry := DBEntry{
+			ID:          entryID,
+			Category:    "games",
+			Title:       title,
+			Group:       sourceName,
+			Path:        relPath,
+			Files:       files,
+			PrimaryFile: primaryFile,
+			FileType:    fileType,
+		}
+
+		entries = append(entries, entry)
+		entryID++
+
+		if entryID%1000 == 0 {
+			fmt.Printf("  Processed %d entries...\n", entryID-1)
+		}
+
+		return nil
+	})
+
+	return entries, err
+}
+
+// scanOneLoad64Collection scans the OneLoad64 collection with {crt,prg}/Letter/Title structure.
+func scanOneLoad64Collection(basePath, collectionPath string) ([]DBEntry, error) {
+	var entries []DBEntry
+	entryID := 1
+
+	fullPath := filepath.Join(basePath, collectionPath)
+
+	// Scan both crt and prg subdirectories.
+	for _, subDir := range []string{"crt", "prg"} {
+		subPath := filepath.Join(fullPath, subDir)
+
+		err := filepath.WalkDir(subPath, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+
+			if !d.IsDir() {
+				return nil
+			}
+
+			rel, _ := filepath.Rel(subPath, path)
+			if rel == "." {
+				return nil
+			}
+
+			parts := strings.Split(rel, string(os.PathSeparator))
+
+			// We want title folders at level 2: Letter/Title
+			if len(parts) != 2 {
+				return nil
+			}
+
+			title := parts[1] // Title folder
+
+			// Scan the folder for files.
+			files, primaryFile, fileType := scanReleaseFolder(path)
+			if len(files) == 0 {
+				return nil
+			}
+
+			// Build the relative path from assembly64 root.
+			relPath := filepath.Join(collectionPath, subDir, rel)
+
+			entry := DBEntry{
+				ID:          entryID,
+				Category:    "games",
+				Title:       title,
+				Group:       "OneLoad64",
+				Path:        relPath,
+				Files:       files,
+				PrimaryFile: primaryFile,
+				FileType:    fileType,
+			}
+
+			entries = append(entries, entry)
+			entryID++
+
+			if entryID%1000 == 0 {
+				fmt.Printf("  Processed %d entries...\n", entryID-1)
+			}
+
+			return nil
+		})
+
+		if err != nil {
+			fmt.Printf("  Warning: Error scanning %s: %v\n", subDir, err)
+		}
+	}
+
+	return entries, nil
+}
+
+// scanMayhemCrtCollection scans the Mayhem-crt collection with Publisher/Title structure.
+func scanMayhemCrtCollection(basePath, collectionPath string) ([]DBEntry, error) {
+	var entries []DBEntry
+	entryID := 1
+
+	fullPath := filepath.Join(basePath, collectionPath)
+
+	err := filepath.WalkDir(fullPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		if !d.IsDir() {
+			return nil
+		}
+
+		rel, _ := filepath.Rel(fullPath, path)
+		if rel == "." {
+			return nil
+		}
+
+		parts := strings.Split(rel, string(os.PathSeparator))
+
+		// We want title folders at level 2: Publisher/Title
+		if len(parts) != 2 {
+			return nil
+		}
+
+		publisher := parts[0] // Publisher folder
+		title := parts[1]     // Title folder
+
+		// Scan the folder for files.
+		files, primaryFile, fileType := scanReleaseFolder(path)
+		if len(files) == 0 {
+			return nil
+		}
+
+		// Build the relative path from assembly64 root.
+		relPath := filepath.Join(collectionPath, rel)
+
+		entry := DBEntry{
+			ID:          entryID,
+			Category:    "games",
+			Title:       title,
+			Group:       publisher, // Use publisher as group
+			Path:        relPath,
+			Files:       files,
+			PrimaryFile: primaryFile,
+			FileType:    fileType,
+		}
+
+		entries = append(entries, entry)
+		entryID++
+
+		return nil
+	})
+
+	return entries, err
+}
+
+// GenerateGamesCollectionDB generates a games JSON database for a specific collection.
+func GenerateGamesCollectionDB(basePath, outputPath, sourceName, collectionPath string, scanFunc func(string, string, string) ([]DBEntry, error)) error {
+	fmt.Printf("Scanning %s...\n", collectionPath)
+
+	entries, err := scanFunc(basePath, collectionPath, sourceName)
+	if err != nil {
+		return fmt.Errorf("failed to scan directory: %w", err)
+	}
+
+	fmt.Printf("  Total entries: %d\n", len(entries))
+
+	if len(entries) == 0 {
+		fmt.Println("  No entries found, skipping file generation")
+		return nil
+	}
+
+	// Build database structure.
+	db := Database{
+		Version:      "1.0",
+		Generated:    time.Now().UTC().Format(time.RFC3339),
+		Source:       sourceName,
+		TotalEntries: len(entries),
+		Entries:      entries,
+	}
+
+	// Write JSON file.
+	fmt.Printf("Writing %s...\n", outputPath)
+
+	jsonData, err := json.Marshal(db)
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	if err := os.WriteFile(outputPath, jsonData, 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	fmt.Printf("Done! Generated %s (%d bytes, %d entries)\n", outputPath, len(jsonData), len(entries))
+
+	return nil
+}
+
+// GenerateC64comDB generates the C64com games database.
+func GenerateC64comDB(basePath, outputPath string) error {
+	return GenerateGamesCollectionDB(basePath, outputPath, "c64com", "Games/C64com", scanSimpleGamesCollection)
+}
+
+// GenerateGuybrushDB generates the Guybrush games database.
+func GenerateGuybrushDB(basePath, outputPath string) error {
+	return GenerateGamesCollectionDB(basePath, outputPath, "guybrush", "Games/Guybrush", scanSimpleGamesCollection)
+}
+
+// GenerateGuybrushGermanDB generates the Guybrush-german games database.
+func GenerateGuybrushGermanDB(basePath, outputPath string) error {
+	return GenerateGamesCollectionDB(basePath, outputPath, "guybrush-german", "Games/Guybrush-german", scanSimpleGamesCollection)
+}
+
+// GenerateGamebaseDB generates the Gamebase games database.
+func GenerateGamebaseDB(basePath, outputPath string) error {
+	return GenerateGamesCollectionDB(basePath, outputPath, "gamebase", "Games/Gamebase", scanThreeLevelGamesCollection)
+}
+
+// GenerateC64TapesDB generates the C64Tapes-org games database.
+func GenerateC64TapesDB(basePath, outputPath string) error {
+	return GenerateGamesCollectionDB(basePath, outputPath, "c64tapes", "Games/C64Tapes-org", scanSimpleGamesCollection)
+}
+
+// scanPreserversCollection scans the Preservers collection with {Disc,Tape,G64}/Letter/Title structure.
+func scanPreserversCollection(basePath, collectionPath string) ([]DBEntry, error) {
+	var entries []DBEntry
+	entryID := 1
+
+	fullPath := filepath.Join(basePath, collectionPath)
+
+	// Scan all subdirectories (Disc, Tape, G64, etc.).
+	subDirs, err := os.ReadDir(fullPath)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, subDir := range subDirs {
+		if !subDir.IsDir() {
+			continue
+		}
+
+		subPath := filepath.Join(fullPath, subDir.Name())
+
+		err := filepath.WalkDir(subPath, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+
+			if !d.IsDir() {
+				return nil
+			}
+
+			rel, _ := filepath.Rel(subPath, path)
+			if rel == "." {
+				return nil
+			}
+
+			parts := strings.Split(rel, string(os.PathSeparator))
+
+			// We want title folders at level 2: Letter/Title
+			if len(parts) != 2 {
+				return nil
+			}
+
+			title := parts[1] // Title folder
+
+			// Scan the folder for files.
+			files, primaryFile, fileType := scanReleaseFolder(path)
+			if len(files) == 0 {
+				return nil
+			}
+
+			// Build the relative path from assembly64 root.
+			relPath := filepath.Join(collectionPath, subDir.Name(), rel)
+
+			entry := DBEntry{
+				ID:          entryID,
+				Category:    "games",
+				Title:       title,
+				Group:       "Preservers",
+				Path:        relPath,
+				Files:       files,
+				PrimaryFile: primaryFile,
+				FileType:    fileType,
+			}
+
+			entries = append(entries, entry)
+			entryID++
+
+			if entryID%1000 == 0 {
+				fmt.Printf("  Processed %d entries...\n", entryID-1)
+			}
+
+			return nil
+		})
+
+		if err != nil {
+			fmt.Printf("  Warning: Error scanning %s: %v\n", subDir.Name(), err)
+		}
+	}
+
+	return entries, nil
+}
+
+// GeneratePreserversDB generates the Preservers games database.
+func GeneratePreserversDB(basePath, outputPath string) error {
+	fmt.Println("Scanning Games/Preservers...")
+
+	entries, err := scanPreserversCollection(basePath, "Games/Preservers")
+	if err != nil {
+		return fmt.Errorf("failed to scan directory: %w", err)
+	}
+
+	fmt.Printf("  Total entries: %d\n", len(entries))
+
+	if len(entries) == 0 {
+		fmt.Println("  No entries found, skipping file generation")
+		return nil
+	}
+
+	db := Database{
+		Version:      "1.0",
+		Generated:    time.Now().UTC().Format(time.RFC3339),
+		Source:       "preservers",
+		TotalEntries: len(entries),
+		Entries:      entries,
+	}
+
+	fmt.Printf("Writing %s...\n", outputPath)
+
+	jsonData, err := json.Marshal(db)
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	if err := os.WriteFile(outputPath, jsonData, 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	fmt.Printf("Done! Generated %s (%d bytes, %d entries)\n", outputPath, len(jsonData), len(entries))
+
+	return nil
+}
+
+// GenerateSEUCKDB generates the SEUCK games database.
+func GenerateSEUCKDB(basePath, outputPath string) error {
+	return GenerateGamesCollectionDB(basePath, outputPath, "seuck", "Games/SEUCK", scanSimpleGamesCollection)
+}
+
+// GenerateOneLoad64DB generates the OneLoad64 games database.
+func GenerateOneLoad64DB(basePath, outputPath string) error {
+	fmt.Println("Scanning Games/OneLoad64...")
+
+	entries, err := scanOneLoad64Collection(basePath, "Games/OneLoad64")
+	if err != nil {
+		return fmt.Errorf("failed to scan directory: %w", err)
+	}
+
+	fmt.Printf("  Total entries: %d\n", len(entries))
+
+	if len(entries) == 0 {
+		fmt.Println("  No entries found, skipping file generation")
+		return nil
+	}
+
+	db := Database{
+		Version:      "1.0",
+		Generated:    time.Now().UTC().Format(time.RFC3339),
+		Source:       "oneload64",
+		TotalEntries: len(entries),
+		Entries:      entries,
+	}
+
+	fmt.Printf("Writing %s...\n", outputPath)
+
+	jsonData, err := json.Marshal(db)
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	if err := os.WriteFile(outputPath, jsonData, 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	fmt.Printf("Done! Generated %s (%d bytes, %d entries)\n", outputPath, len(jsonData), len(entries))
+
+	return nil
+}
+
+// GenerateMayhemCrtDB generates the Mayhem-crt games database.
+func GenerateMayhemCrtDB(basePath, outputPath string) error {
+	fmt.Println("Scanning Games/Mayhem-crt...")
+
+	entries, err := scanMayhemCrtCollection(basePath, "Games/Mayhem-crt")
+	if err != nil {
+		return fmt.Errorf("failed to scan directory: %w", err)
+	}
+
+	fmt.Printf("  Total entries: %d\n", len(entries))
+
+	if len(entries) == 0 {
+		fmt.Println("  No entries found, skipping file generation")
+		return nil
+	}
+
+	db := Database{
+		Version:      "1.0",
+		Generated:    time.Now().UTC().Format(time.RFC3339),
+		Source:       "mayhem-crt",
+		TotalEntries: len(entries),
+		Entries:      entries,
+	}
+
+	fmt.Printf("Writing %s...\n", outputPath)
+
+	jsonData, err := json.Marshal(db)
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	if err := os.WriteFile(outputPath, jsonData, 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	fmt.Printf("Done! Generated %s (%d bytes, %d entries)\n", outputPath, len(jsonData), len(entries))
+
+	return nil
+}
+
 // GenerateMusicDB generates the music JSON database file.
 func GenerateMusicDB(basePath, outputPath string) error {
 	fmt.Println("Scanning Music collections...")

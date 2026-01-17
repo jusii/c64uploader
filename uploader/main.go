@@ -450,7 +450,7 @@ func runDBGen(args []string) {
 	fs := flag.NewFlagSet("dbgen", flag.ExitOnError)
 	assembly64Path := fs.String("assembly64", "", "Path to Assembly64 data directory (required)")
 	category := fs.String("category", "all", "Category to generate: games, demos, music, or all (default: all)")
-	source := fs.String("source", "csdb", "Games source: csdb, c64com, gamebase, guybrush, guybrush-german, oneload64, mayhem-crt, c64tapes, preservers, seuck, or all")
+	source := fs.String("source", "csdb", "Source collection (applies to games and demos categories)")
 	fs.Parse(args)
 
 	if *assembly64Path == "" {
@@ -459,6 +459,7 @@ func runDBGen(args []string) {
 		fmt.Fprintf(os.Stderr, "Example: c64uploader dbgen -assembly64 ~/assembly64\n")
 		fmt.Fprintf(os.Stderr, "Example: c64uploader dbgen -assembly64 ~/assembly64 -category games -source c64com\n")
 		fmt.Fprintf(os.Stderr, "\nGames sources: csdb, c64com, gamebase, guybrush, guybrush-german, oneload64, mayhem-crt, c64tapes, preservers, seuck, all\n")
+		fmt.Fprintf(os.Stderr, "Demos sources: csdb, c64com, guybrush, all\n")
 		os.Exit(1)
 	}
 
@@ -588,13 +589,36 @@ func runDBGen(args []string) {
 	}
 
 	if cat == "all" || cat == "demos" {
-		demosFile := filepath.Join(path, "c64uploader_demos.json")
-		fmt.Println("=== Generating Demos Database ===")
-		if err := GenerateDemosDB(path, demosFile); err != nil {
-			fmt.Fprintf(os.Stderr, "Error generating demos: %v\n", err)
-			hasError = true
+		// Generate demos databases based on source.
+		if src == "all" || src == "csdb" {
+			demosFile := filepath.Join(path, "c64uploader_demos.json")
+			fmt.Println("=== Generating Demos Database (CSDB) ===")
+			if err := GenerateDemosDB(path, demosFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Error generating CSDB demos: %v\n", err)
+				hasError = true
+			}
+			fmt.Println()
 		}
-		fmt.Println()
+
+		if src == "all" || src == "c64com" {
+			demosFile := filepath.Join(path, "c64uploader_demos_c64com.json")
+			fmt.Println("=== Generating Demos Database (C64com) ===")
+			if err := GenerateC64comDemosDB(path, demosFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Error generating C64com demos: %v\n", err)
+				hasError = true
+			}
+			fmt.Println()
+		}
+
+		if src == "all" || src == "guybrush" {
+			demosFile := filepath.Join(path, "c64uploader_demos_guybrush.json")
+			fmt.Println("=== Generating Demos Database (Guybrush) ===")
+			if err := GenerateGuybrushDemosDB(path, demosFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Error generating Guybrush demos: %v\n", err)
+				hasError = true
+			}
+			fmt.Println()
+		}
 	}
 
 	if cat == "all" || cat == "music" {

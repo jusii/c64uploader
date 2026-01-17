@@ -1915,6 +1915,221 @@ func GenerateMayhemCrtDB(basePath, outputPath string) error {
 	return nil
 }
 
+// scanSimpleDemosCollection scans a simple demos collection with Letter/Title structure.
+// Used for Guybrush demos.
+func scanSimpleDemosCollection(basePath, collectionPath, sourceName string) ([]DBEntry, error) {
+	var entries []DBEntry
+	entryID := 1
+
+	fullPath := filepath.Join(basePath, collectionPath)
+
+	err := filepath.WalkDir(fullPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		if !d.IsDir() {
+			return nil
+		}
+
+		rel, _ := filepath.Rel(fullPath, path)
+		if rel == "." {
+			return nil
+		}
+
+		parts := strings.Split(rel, string(os.PathSeparator))
+
+		// We want title folders at level 2: Letter/Title
+		if len(parts) != 2 {
+			return nil
+		}
+
+		title := parts[1] // Title folder
+
+		// Scan the folder for files.
+		files, primaryFile, fileType := scanReleaseFolder(path)
+		if len(files) == 0 {
+			return nil
+		}
+
+		// Build the relative path from assembly64 root.
+		relPath := filepath.Join(collectionPath, rel)
+
+		entry := DBEntry{
+			ID:          entryID,
+			Category:    "demos",
+			Title:       title,
+			Group:       sourceName,
+			Path:        relPath,
+			Files:       files,
+			PrimaryFile: primaryFile,
+			FileType:    fileType,
+		}
+
+		entries = append(entries, entry)
+		entryID++
+
+		if entryID%1000 == 0 {
+			fmt.Printf("  Processed %d entries...\n", entryID-1)
+		}
+
+		return nil
+	})
+
+	return entries, err
+}
+
+// scanC64comDemosCollection scans the C64com demos collection with Letter/Group/Title structure.
+func scanC64comDemosCollection(basePath, collectionPath string) ([]DBEntry, error) {
+	var entries []DBEntry
+	entryID := 1
+
+	fullPath := filepath.Join(basePath, collectionPath)
+
+	err := filepath.WalkDir(fullPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		if !d.IsDir() {
+			return nil
+		}
+
+		rel, _ := filepath.Rel(fullPath, path)
+		if rel == "." {
+			return nil
+		}
+
+		parts := strings.Split(rel, string(os.PathSeparator))
+
+		// We want title folders at level 3: Letter/Group/Title
+		if len(parts) != 3 {
+			return nil
+		}
+
+		group := parts[1] // Group folder
+		title := parts[2] // Title folder
+
+		// Scan the folder for files.
+		files, primaryFile, fileType := scanReleaseFolder(path)
+		if len(files) == 0 {
+			return nil
+		}
+
+		// Build the relative path from assembly64 root.
+		relPath := filepath.Join(collectionPath, rel)
+
+		entry := DBEntry{
+			ID:          entryID,
+			Category:    "demos",
+			Title:       title,
+			Group:       group,
+			Path:        relPath,
+			Files:       files,
+			PrimaryFile: primaryFile,
+			FileType:    fileType,
+		}
+
+		entries = append(entries, entry)
+		entryID++
+
+		if entryID%1000 == 0 {
+			fmt.Printf("  Processed %d entries...\n", entryID-1)
+		}
+
+		return nil
+	})
+
+	return entries, err
+}
+
+// GenerateDemosCollectionDB generates a demos JSON database for a specific collection.
+func GenerateDemosCollectionDB(basePath, outputPath, sourceName, collectionPath string, scanFunc func(string, string, string) ([]DBEntry, error)) error {
+	fmt.Printf("Scanning %s...\n", collectionPath)
+
+	entries, err := scanFunc(basePath, collectionPath, sourceName)
+	if err != nil {
+		return fmt.Errorf("failed to scan directory: %w", err)
+	}
+
+	fmt.Printf("  Total entries: %d\n", len(entries))
+
+	if len(entries) == 0 {
+		fmt.Println("  No entries found, skipping file generation")
+		return nil
+	}
+
+	// Build database structure.
+	db := Database{
+		Version:      "1.0",
+		Generated:    time.Now().UTC().Format(time.RFC3339),
+		Source:       sourceName,
+		TotalEntries: len(entries),
+		Entries:      entries,
+	}
+
+	// Write JSON file.
+	fmt.Printf("Writing %s...\n", outputPath)
+
+	jsonData, err := json.Marshal(db)
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	if err := os.WriteFile(outputPath, jsonData, 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	fmt.Printf("Done! Generated %s (%d bytes, %d entries)\n", outputPath, len(jsonData), len(entries))
+
+	return nil
+}
+
+// GenerateC64comDemosDB generates the C64com demos database.
+func GenerateC64comDemosDB(basePath, outputPath string) error {
+	fmt.Println("Scanning Demos/C64com...")
+
+	entries, err := scanC64comDemosCollection(basePath, "Demos/C64com")
+	if err != nil {
+		return fmt.Errorf("failed to scan directory: %w", err)
+	}
+
+	fmt.Printf("  Total entries: %d\n", len(entries))
+
+	if len(entries) == 0 {
+		fmt.Println("  No entries found, skipping file generation")
+		return nil
+	}
+
+	db := Database{
+		Version:      "1.0",
+		Generated:    time.Now().UTC().Format(time.RFC3339),
+		Source:       "c64com",
+		TotalEntries: len(entries),
+		Entries:      entries,
+	}
+
+	fmt.Printf("Writing %s...\n", outputPath)
+
+	jsonData, err := json.Marshal(db)
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	if err := os.WriteFile(outputPath, jsonData, 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	fmt.Printf("Done! Generated %s (%d bytes, %d entries)\n", outputPath, len(jsonData), len(entries))
+
+	return nil
+}
+
+// GenerateGuybrushDemosDB generates the Guybrush demos database.
+func GenerateGuybrushDemosDB(basePath, outputPath string) error {
+	return GenerateDemosCollectionDB(basePath, outputPath, "guybrush", "Demos/Guybrush", scanSimpleDemosCollection)
+}
+
 // GenerateMusicDB generates the music JSON database file.
 func GenerateMusicDB(basePath, outputPath string) error {
 	fmt.Println("Scanning Music collections...")

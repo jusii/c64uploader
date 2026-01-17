@@ -42,7 +42,7 @@ static bool connected = false;
 // Menu/list state
 #define MAX_ITEMS 20
 static char item_names[MAX_ITEMS][32];
-static int  item_ids[MAX_ITEMS];
+static long item_ids[MAX_ITEMS];
 static int  item_count = 0;
 static long total_count = 0;
 static int  cursor = 0;
@@ -368,7 +368,7 @@ void load_entries(const char *category, int start)
         if (name)
         {
             *name++ = 0;
-            item_ids[item_count] = atoi(id_str);
+            item_ids[item_count] = atol(id_str);
 
             // Find category (next |)
             char *cat = strchr(name, '|');
@@ -425,12 +425,12 @@ void load_entries(const char *category, int start)
 }
 
 // Run selected entry
-void run_entry(int id)
+void run_entry(long id)
 {
     print_status("running...");
 
     char cmd[32];
-    sprintf(cmd, "RUN %d", id);
+    sprintf(cmd, "RUN %ld", id);
     send_command(cmd);
 
     read_line();  // "OK Running xxx" or "ERR xxx"
@@ -478,7 +478,7 @@ void do_search(const char *query, int start)
         if (name)
         {
             *name++ = 0;
-            item_ids[item_count] = atoi(id_str);
+            item_ids[item_count] = atol(id_str);
 
             // Find end of name (next |)
             char *end = strchr(name, '|');
@@ -573,7 +573,7 @@ void do_adv_search(int start)
         if (name)
         {
             *name++ = 0;
-            item_ids[item_count] = atoi(id_str);
+            item_ids[item_count] = atol(id_str);
 
             // Find category (next |)
             char *cat = strchr(name, '|');
@@ -670,7 +670,7 @@ void do_releases(const char *category, const char *title, int start)
         if (grp)
         {
             *grp++ = 0;
-            item_ids[item_count] = atoi(id_str);
+            item_ids[item_count] = atol(id_str);
 
             // Find year (next |)
             char *year = strchr(grp, '|');
@@ -720,12 +720,12 @@ void do_releases(const char *category, const char *title, int start)
 }
 
 // Fetch info for an entry
-bool fetch_info(int id)
+bool fetch_info(long id)
 {
     print_status("loading info...");
 
     char cmd[32];
-    sprintf(cmd, "INFO %d", id);
+    sprintf(cmd, "INFO %ld", id);
     send_command(cmd);
     read_line();  // "OK" or "ERR ..."
 

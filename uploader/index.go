@@ -83,6 +83,10 @@ func LoadIndexFromMultipleJSON(jsonPaths []string, assembly64Path string) (*Sear
 	}
 	index.ByCategory["All"] = allIndices
 
+	// Log category counts for debugging
+	for _, cat := range index.CategoryOrder {
+		slog.Info("Category loaded", "category", cat, "entries", len(index.ByCategory[cat]))
+	}
 	slog.Info("Index loaded from multiple JSON files", "total_entries", len(index.Entries), "categories", len(index.CategoryOrder)-1)
 	return index, nil
 }

@@ -249,13 +249,15 @@ func handleList(index *SearchIndex, category string, offset, count int, grouped 
 		return b.String()
 	}
 
-	// Grouped mode: group by normalized title
-	seen := make(map[string]int) // normalized title -> index in grouped slice
+	// Grouped mode: group by normalized title within category
+	seen := make(map[string]int) // "category:normalized_title" -> index in grouped slice
 	var groupedEntries []groupedEntry
 
 	for _, idx := range entries {
 		entry := index.Entries[idx]
 		norm := normalizeTitle(entry.Name)
+		// Include category in key to prevent cross-category grouping
+		groupKey := entry.CategoryName + ":" + norm
 
 		// Get trainer count for this entry
 		trainers := -1
@@ -263,13 +265,13 @@ func handleList(index *SearchIndex, category string, offset, count int, grouped 
 			trainers = entry.Crack.Trainers
 		}
 
-		if existingIdx, ok := seen[norm]; ok {
+		if existingIdx, ok := seen[groupKey]; ok {
 			groupedEntries[existingIdx].Count++
 			if trainers > groupedEntries[existingIdx].MaxTrainers {
 				groupedEntries[existingIdx].MaxTrainers = trainers
 			}
 		} else {
-			seen[norm] = len(groupedEntries)
+			seen[groupKey] = len(groupedEntries)
 			groupedEntries = append(groupedEntries, groupedEntry{
 				NormalizedTitle: norm,
 				DisplayTitle:    entry.Name,
@@ -289,6 +291,16 @@ func handleList(index *SearchIndex, category string, offset, count int, grouped 
 	end := offset + count
 	if count == 0 || end > total {
 		end = total
+	}
+
+	// Debug: log the first few entries being returned
+	if offset == 0 && len(groupedEntries) > 0 {
+		for i := 0; i < 3 && i < len(groupedEntries); i++ {
+			g := groupedEntries[i]
+			entry := index.Entries[g.FirstID]
+			slog.Info("LIST grouped entry", "position", i, "id", g.FirstID, "name", g.DisplayTitle,
+				"listCategory", g.Category, "entryCategory", entry.CategoryName, "path", entry.Path)
+		}
 	}
 
 	var b strings.Builder
@@ -419,13 +431,15 @@ func handleAdvSearch(index *SearchIndex, params map[string]string, offset, count
 
 // handleGroupedResults groups matching entries by normalized title.
 func handleGroupedResults(index *SearchIndex, results []int, category string, offset, count int) string {
-	// Group by normalized title, preserving order of first occurrence
-	seen := make(map[string]int) // normalized title -> index in grouped slice
+	// Group by normalized title within each category, preserving order of first occurrence
+	seen := make(map[string]int) // "category:normalized_title" -> index in grouped slice
 	var grouped []groupedEntry
 
 	for _, idx := range results {
 		entry := index.Entries[idx]
 		norm := normalizeTitle(entry.Name)
+		// Include category in key to prevent cross-category grouping
+		groupKey := entry.CategoryName + ":" + norm
 
 		// Get trainer count for this entry (-1 = unknown, 0 = none or non-game)
 		trainers := -1
@@ -433,7 +447,7 @@ func handleGroupedResults(index *SearchIndex, results []int, category string, of
 			trainers = entry.Crack.Trainers
 		}
 
-		if existingIdx, ok := seen[norm]; ok {
+		if existingIdx, ok := seen[groupKey]; ok {
 			// Increment count for existing group
 			grouped[existingIdx].Count++
 			// Track max trainers
@@ -442,7 +456,7 @@ func handleGroupedResults(index *SearchIndex, results []int, category string, of
 			}
 		} else {
 			// New group
-			seen[norm] = len(grouped)
+			seen[groupKey] = len(grouped)
 			grouped = append(grouped, groupedEntry{
 				NormalizedTitle: norm,
 				DisplayTitle:    entry.Name,
@@ -513,6 +527,9 @@ func handleRun(index *SearchIndex, apiClient *APIClient, assembly64Path string, 
 	}
 
 	entry := index.Entries[id]
+
+	// Debug: log exactly what entry is being run
+	slog.Info("RUN command", "id", id, "name", entry.Name, "category", entry.CategoryName, "path", entry.Path)
 
 	// Use FullPath which was computed during indexing
 	fullPath := entry.FullPath

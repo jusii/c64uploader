@@ -1,0 +1,1053 @@
+// SQLite-based server handlers for C64 protocol.
+// These replace the in-memory JSON-based handlers with direct SQL queries.
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"log/slog"
+	"net"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	c64ReadTimeout = 5 * time.Minute
+)
+
+// StartC64ServerSQLite starts the C64 protocol server with SQLite backend.
+func StartC64ServerSQLite(port int, sqliteServer *SQLiteServer, apiClient *APIClient, assembly64Path string) error {
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return fmt.Errorf("failed to start C64 server: %w", err)
+	}
+
+	slog.Info("C64 protocol server listening (SQLite)", "port", port)
+	fmt.Printf("C64 protocol server listening on :%d (SQLite backend)\n", port)
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				slog.Error("Accept error", "error", err)
+				continue
+			}
+			go handleC64ConnectionSQLite(conn, sqliteServer, apiClient, assembly64Path)
+		}
+	}()
+
+	return nil
+}
+
+func handleC64ConnectionSQLite(conn net.Conn, server *SQLiteServer, apiClient *APIClient, assembly64Path string) {
+	defer conn.Close()
+
+	remoteAddr := conn.RemoteAddr().String()
+	slog.Info("C64 client connected", "remote", remoteAddr)
+
+	// Send greeting
+	conn.Write([]byte("OK Assembly64 Browser\n"))
+
+	reader := bufio.NewReader(conn)
+
+	for {
+		conn.SetReadDeadline(time.Now().Add(c64ReadTimeout))
+
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			slog.Debug("C64 client disconnected", "remote", remoteAddr, "error", err)
+			return
+		}
+
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		slog.Debug("C64 command", "remote", remoteAddr, "cmd", line)
+
+		response := handleC64CommandSQLite(line, server, apiClient, assembly64Path, conn)
+		if response == "QUIT" {
+			conn.Write([]byte("OK Goodbye\n"))
+			return
+		}
+		// Log response header (first line) for debugging
+		if idx := strings.Index(response, "\n"); idx > 0 {
+			slog.Debug("C64 response", "header", response[:idx])
+		}
+		conn.Write([]byte(response))
+	}
+}
+
+func handleC64CommandSQLite(line string, server *SQLiteServer, apiClient *APIClient, assembly64Path string, conn net.Conn) string {
+	parts := strings.Fields(line)
+	if len(parts) == 0 {
+		return "ERR Empty command\n"
+	}
+
+	cmd := strings.ToUpper(parts[0])
+
+	switch cmd {
+	case "CATS":
+		return server.HandleMenu("")
+
+	case "LIST":
+		// LIST offset count path [letter] - List entries matching path, optionally filtered by letter
+		if len(parts) < 4 {
+			return "ERR Usage: LIST <offset> <count> <path> [letter]\n"
+		}
+		offset, _ := strconv.Atoi(parts[1])
+		count, _ := strconv.Atoi(parts[2])
+		path := parts[3]
+		letter := ""
+		if len(parts) >= 5 {
+			letter = parts[4]
+		}
+		return server.HandleListPath(path, offset, count, letter)
+
+	case "SEARCH":
+		if len(parts) < 4 {
+			return "ERR Usage: SEARCH <offset> <count> [category] <query>\n"
+		}
+		offset, _ := strconv.Atoi(parts[1])
+		count, _ := strconv.Atoi(parts[2])
+		// Check if parts[3] is a category
+		category := ""
+		queryStart := 3
+		potentialCat := parts[3]
+		knownCategories := []string{"Games", "Demos", "Music", "Intros", "Graphics", "Discmags", "All"}
+		for _, cat := range knownCategories {
+			if strings.EqualFold(cat, potentialCat) {
+				category = cat
+				queryStart = 4
+				break
+			}
+		}
+		if queryStart > len(parts) {
+			return "ERR Usage: SEARCH <offset> <count> [category] <query>\n"
+		}
+		query := strings.Join(parts[queryStart:], " ")
+		return server.HandleSearch(query, category, offset, count)
+
+	case "INFO":
+		if len(parts) < 2 {
+			return "ERR Usage: INFO <id>\n"
+		}
+		id, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil {
+			return "ERR Invalid ID\n"
+		}
+		return server.HandleInfo(id)
+
+	case "RUN":
+		if len(parts) < 2 {
+			return "ERR Usage: RUN <id>\n"
+		}
+		id, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil {
+			return "ERR Invalid ID\n"
+		}
+		filePath, err := server.GetFilePath(id)
+		if err != nil {
+			return fmt.Sprintf("ERR %s\n", err.Error())
+		}
+		// Run the file
+		fileData, err := os.ReadFile(filePath)
+		if err != nil {
+			return fmt.Sprintf("ERR Failed to read file: %v\n", err)
+		}
+		if err := uploadAndRunFile(apiClient, fileData, filePath); err != nil {
+			return fmt.Sprintf("ERR Failed to run: %v\n", err)
+		}
+		return "OK Running\n"
+
+	case "RELEASES":
+		if len(parts) < 5 {
+			return "ERR Usage: RELEASES <offset> <count> <path> <title>\n"
+		}
+		offset, _ := strconv.Atoi(parts[1])
+		count, _ := strconv.Atoi(parts[2])
+		// Path is parts[3] (e.g., "Games/CSDB/A"), title is everything after (may contain spaces)
+		path := parts[3]
+		title := strings.Join(parts[4:], " ")
+		return server.HandleReleases(path, title, offset, count)
+
+	case "MENU":
+		path := ""
+		if len(parts) >= 2 {
+			path = strings.Join(parts[1:], " ")
+		}
+		return server.HandleMenu(path)
+
+	case "LISTPATH":
+		// LISTPATH offset count path [letter] - List entries matching path prefix (legacy, use LIST instead)
+		if len(parts) < 4 {
+			return "ERR Usage: LISTPATH <offset> <count> <path> [letter]\n"
+		}
+		offset, _ := strconv.Atoi(parts[1])
+		count, _ := strconv.Atoi(parts[2])
+		path := parts[3]
+		letter := ""
+		if len(parts) >= 5 {
+			letter = parts[4]
+		}
+		return server.HandleListPath(path, offset, count, letter)
+
+	case "LETTERS":
+		// LETTERS path - Get letter counts for browse mode
+		if len(parts) < 2 {
+			return "ERR Usage: LETTERS <path>\n"
+		}
+		path := strings.Join(parts[1:], " ")
+		return server.HandleLetters(path)
+
+	case "QUIT":
+		return "QUIT"
+
+	default:
+		return fmt.Sprintf("ERR Unknown command: %s\n", cmd)
+	}
+}
+
+// SQLiteServer wraps the database for server operations.
+type SQLiteServer struct {
+	db             *DB
+	assembly64Path string
+}
+
+// NewSQLiteServer creates a new SQLite-based server.
+func NewSQLiteServer(dbPath, assembly64Path string) (*SQLiteServer, error) {
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	return &SQLiteServer{db: db, assembly64Path: assembly64Path}, nil
+}
+
+// Close closes the database connection.
+func (s *SQLiteServer) Close() error {
+	return s.db.Close()
+}
+
+// HandleMenu returns menu entries for the given path using SQL queries.
+func (s *SQLiteServer) HandleMenu(path string) string {
+	slog.Debug("HandleMenu called", "path", path)
+
+	if path == "" {
+		// Root menu - list categories
+		return s.getRootMenu()
+	}
+
+	parts := strings.Split(path, "/")
+	slog.Debug("HandleMenu parts", "parts", parts, "len", len(parts))
+
+	if len(parts) == 0 {
+		return ".\n"
+	}
+
+	category := parts[0]
+
+	switch category {
+	case "Games":
+		return s.getGamesMenu(parts)
+	case "Demos":
+		return s.getDemosMenu(parts)
+	case "Music":
+		return s.getMusicMenu(parts)
+	case "Intros":
+		return s.getIntrosMenu(parts)
+	case "Graphics":
+		return s.getGraphicsMenu(parts)
+	case "Discmags":
+		return s.getDiscmagsMenu(parts)
+	default:
+		return ".\n"
+	}
+}
+
+func (s *SQLiteServer) getRootMenu() string {
+	var b strings.Builder
+	// Static root menu with short type codes: f=folder, b=browse, l=list
+	categories := []string{"Games", "Demos", "Music", "Intros", "Graphics", "Discmags"}
+
+	b.WriteString(fmt.Sprintf("OK %d\n", len(categories)))
+	for _, cat := range categories {
+		count, _ := s.db.CountByPathPrefix(cat + "/")
+		// Protocol format: type|name|path|count
+		b.WriteString(fmt.Sprintf("f|%s|%s|%d\n", cat, cat, count))
+	}
+	b.WriteString(".\n")
+	return b.String()
+}
+
+func (s *SQLiteServer) getGamesMenu(parts []string) string {
+	slog.Debug("getGamesMenu called", "parts", parts, "len", len(parts))
+
+	if len(parts) == 1 {
+		// Games/ - list sources
+		sources := []struct {
+			name   string
+			source string
+		}{
+			{"CSDB", "CSDB"},
+			{"C64.com", "C64com"},
+			{"Gamebase", "Gamebase"},
+			{"Guybrush", "Guybrush"},
+			{"OneLoad64", "OneLoad64"},
+			{"Mayhem CRT", "Mayhem"},
+			{"C64 Tapes", "C64Tapes"},
+			{"Preservers", "Preservers"},
+			{"SEUCK", "SEUCK"},
+		}
+		return s.formatSourceMenu("Games", sources)
+	}
+
+	source := parts[1]
+	if len(parts) == 2 {
+		slog.Debug("getGamesMenu: returning source menu", "source", source)
+		// Games/Source/ - show Browse A-Z + special lists
+		var entries []string
+
+		// Count total entries for this source
+		var totalCount int
+		s.db.conn.QueryRow(`SELECT COUNT(*) FROM entries WHERE category = 'Games' AND source = ?`, source).Scan(&totalCount)
+
+		// Browse A-Z (type=b for browse)
+		entries = append(entries, fmt.Sprintf("b|Browse A-Z|Games/%s|%d", source, totalCount))
+
+		// Add special lists for CSDB
+		if source == "CSDB" {
+			var top200Count int
+			s.db.conn.QueryRow(`SELECT COUNT(*) FROM entries WHERE category = 'Games' AND source = 'CSDB' AND top200_rank IS NOT NULL`).Scan(&top200Count)
+			entries = append(entries, fmt.Sprintf("l|Top 200|Games/CSDB/Top200|%d", top200Count))
+
+			// 4K count
+			var fourKCount int
+			s.db.conn.QueryRow(`SELECT COUNT(*) FROM entries WHERE category = 'Games' AND source = 'CSDB' AND is_4k = 1`).Scan(&fourKCount)
+			entries = append(entries, fmt.Sprintf("l|4K Competition|Games/CSDB/4k|%d", fourKCount))
+		}
+
+		var b strings.Builder
+		b.WriteString(fmt.Sprintf("OK %d\n", len(entries)))
+		for _, e := range entries {
+			b.WriteString(e + "\n")
+		}
+		b.WriteString(".\n")
+		return b.String()
+	}
+
+	// Games/Source/X - no longer needed, client uses LIST command
+	return ".\n"
+}
+
+func (s *SQLiteServer) getDemosMenu(parts []string) string {
+	if len(parts) == 1 {
+		sources := []struct {
+			name   string
+			source string
+		}{
+			{"CSDB", "CSDB"},
+			{"C64.com", "C64com"},
+			{"Guybrush", "Guybrush"},
+		}
+		return s.formatSourceMenu("Demos", sources)
+	}
+
+	source := parts[1]
+	if len(parts) == 2 {
+		var entries []string
+
+		// Count total entries for this source
+		var totalCount int
+		s.db.conn.QueryRow(`SELECT COUNT(*) FROM entries WHERE category = 'Demos' AND source = ?`, source).Scan(&totalCount)
+
+		// Browse A-Z (type=b for browse)
+		entries = append(entries, fmt.Sprintf("b|Browse A-Z|Demos/%s|%d", source, totalCount))
+
+		if source == "CSDB" {
+			// Top 200
+			var top200Count int
+			s.db.conn.QueryRow(`SELECT COUNT(*) FROM entries WHERE category = 'Demos' AND source = 'CSDB' AND top200_rank IS NOT NULL`).Scan(&top200Count)
+			entries = append(entries, fmt.Sprintf("l|Top 200|Demos/CSDB/Top200|%d", top200Count))
+
+			// Top 500
+			var top500Count int
+			s.db.conn.QueryRow(`SELECT COUNT(*) FROM entries WHERE category = 'Demos' AND source = 'CSDB' AND top500_rank IS NOT NULL`).Scan(&top500Count)
+			entries = append(entries, fmt.Sprintf("l|Top 500|Demos/CSDB/Top500|%d", top500Count))
+
+			// By Year
+			var yearCount int
+			s.db.conn.QueryRow(`SELECT COUNT(DISTINCT year) FROM entries WHERE category = 'Demos' AND source = 'CSDB' AND year IS NOT NULL AND year != ''`).Scan(&yearCount)
+			entries = append(entries, fmt.Sprintf("f|By Year|Demos/CSDB/Year|%d", yearCount))
+
+			// Year Top 20
+			var yearTop20Count int
+			s.db.conn.QueryRow(`SELECT COUNT(*) FROM entries WHERE category = 'Demos' AND source = 'CSDB' AND year_rank IS NOT NULL`).Scan(&yearTop20Count)
+			entries = append(entries, fmt.Sprintf("f|Year Top 20|Demos/CSDB/Year-top20|%d", yearTop20Count))
+
+			// Onefile
+			var onefileCount int
+			s.db.conn.QueryRow(`SELECT COUNT(*) FROM entries WHERE category = 'Demos' AND source = 'CSDB' AND is_onefile = 1`).Scan(&onefileCount)
+			entries = append(entries, fmt.Sprintf("f|Onefile|Demos/CSDB/Onefile|%d", onefileCount))
+		}
+
+		var b strings.Builder
+		b.WriteString(fmt.Sprintf("OK %d\n", len(entries)))
+		for _, e := range entries {
+			b.WriteString(e + "\n")
+		}
+		b.WriteString(".\n")
+		return b.String()
+	}
+
+	// Handle sub-paths
+	if len(parts) >= 3 {
+		subPath := parts[2]
+		switch subPath {
+		case "Year":
+			if len(parts) == 3 {
+				return s.getYearMenu("Demos", "CSDB")
+			}
+		case "Year-top20":
+			if len(parts) == 3 {
+				return s.getYearTop20Menu("Demos", "CSDB")
+			}
+		case "Onefile":
+			if len(parts) == 3 {
+				return s.getOnefileLetters()
+			}
+		}
+	}
+
+	return ".\n"
+}
+
+func (s *SQLiteServer) getMusicMenu(parts []string) string {
+	if len(parts) == 1 {
+		sources := []struct {
+			name   string
+			source string
+		}{
+			{"CSDB", "CSDB"},
+			{"HVSC", "HVSC"},
+			{"2SID Collection", "2sid"},
+			{"3SID Collection", "3sid"},
+		}
+		return s.formatSourceMenu("Music", sources)
+	}
+
+	source := parts[1]
+	if len(parts) == 2 {
+		var entries []string
+
+		// Count total entries for this source
+		var totalCount int
+		s.db.conn.QueryRow(`SELECT COUNT(*) FROM entries WHERE category = 'Music' AND source = ?`, source).Scan(&totalCount)
+
+		// Browse A-Z (type=b for browse)
+		entries = append(entries, fmt.Sprintf("b|Browse A-Z|Music/%s|%d", source, totalCount))
+
+		if source == "CSDB" {
+			var top200Count int
+			s.db.conn.QueryRow(`SELECT COUNT(*) FROM entries WHERE category = 'Music' AND source = 'CSDB' AND top200_rank IS NOT NULL`).Scan(&top200Count)
+			entries = append(entries, fmt.Sprintf("l|Top 200|Music/CSDB/Top200|%d", top200Count))
+		}
+
+		var b strings.Builder
+		b.WriteString(fmt.Sprintf("OK %d\n", len(entries)))
+		for _, e := range entries {
+			b.WriteString(e + "\n")
+		}
+		b.WriteString(".\n")
+		return b.String()
+	}
+
+	return ".\n"
+}
+
+func (s *SQLiteServer) getIntrosMenu(parts []string) string {
+	if len(parts) == 1 {
+		sources := []struct {
+			name   string
+			source string
+		}{
+			{"CSDB", "CSDB"},
+			{"C64.org", "C64org"},
+		}
+		return s.formatSourceMenu("Intros", sources)
+	}
+
+	source := parts[1]
+	if len(parts) == 2 {
+		var entries []string
+
+		// Count total entries for this source
+		var totalCount int
+		s.db.conn.QueryRow(`SELECT COUNT(*) FROM entries WHERE category = 'Intros' AND source = ?`, source).Scan(&totalCount)
+
+		// Browse A-Z (type=b for browse)
+		entries = append(entries, fmt.Sprintf("b|Browse A-Z|Intros/%s|%d", source, totalCount))
+
+		var b strings.Builder
+		b.WriteString(fmt.Sprintf("OK %d\n", len(entries)))
+		for _, e := range entries {
+			b.WriteString(e + "\n")
+		}
+		b.WriteString(".\n")
+		return b.String()
+	}
+
+	return ".\n"
+}
+
+func (s *SQLiteServer) getGraphicsMenu(parts []string) string {
+	if len(parts) == 1 {
+		// Graphics has only one source, show Browse A-Z directly
+		var totalCount int
+		s.db.conn.QueryRow(`SELECT COUNT(*) FROM entries WHERE category = 'Graphics' AND source = 'CSDB'`).Scan(&totalCount)
+
+		var b strings.Builder
+		b.WriteString("OK 1\n")
+		b.WriteString(fmt.Sprintf("b|Browse A-Z|Graphics|%d\n", totalCount))
+		b.WriteString(".\n")
+		return b.String()
+	}
+
+	return ".\n"
+}
+
+func (s *SQLiteServer) getDiscmagsMenu(parts []string) string {
+	if len(parts) == 1 {
+		// Discmags has only one source, show Browse A-Z directly
+		var totalCount int
+		s.db.conn.QueryRow(`SELECT COUNT(*) FROM entries WHERE category = 'Discmags' AND source = 'CSDB'`).Scan(&totalCount)
+
+		var b strings.Builder
+		b.WriteString("OK 1\n")
+		b.WriteString(fmt.Sprintf("b|Browse A-Z|Discmags|%d\n", totalCount))
+		b.WriteString(".\n")
+		return b.String()
+	}
+
+	return ".\n"
+}
+
+type letterCount struct {
+	letter string
+	count  int
+}
+
+func (s *SQLiteServer) getLetterCounts(category, source string) []letterCount {
+	rows, err := s.db.conn.Query(`
+		SELECT
+			CASE
+				WHEN SUBSTR(UPPER(normalized_title), 1, 1) BETWEEN 'A' AND 'Z'
+				THEN SUBSTR(UPPER(normalized_title), 1, 1)
+				ELSE '#'
+			END as letter,
+			COUNT(*) as cnt
+		FROM entries
+		WHERE category = ? AND source = ?
+		GROUP BY letter
+		ORDER BY CASE WHEN letter = '#' THEN 0 ELSE 1 END, letter`, category, source)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var result []letterCount
+	for rows.Next() {
+		var l letterCount
+		if err := rows.Scan(&l.letter, &l.count); err == nil {
+			result = append(result, l)
+		}
+	}
+	return result
+}
+
+// HandleLetters returns letter counts for a given path.
+// Used by client to display letter picker UI.
+// Response format: OK <count>\n then <letter>|<count>\n per letter, then .\n
+func (s *SQLiteServer) HandleLetters(path string) string {
+	slog.Debug("HandleLetters called", "path", path)
+
+	// Parse path to extract category and source
+	// Examples: "Games/CSDB", "Demos/C64com", "Graphics", "Discmags"
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 {
+		return "OK 0\n.\n"
+	}
+
+	category := parts[0]
+	source := ""
+
+	// Determine source based on category
+	switch category {
+	case "Games", "Demos", "Music", "Intros":
+		if len(parts) >= 2 {
+			source = parts[1]
+		} else {
+			return "OK 0\n.\n"
+		}
+	case "Graphics", "Discmags":
+		// Single source categories
+		source = "CSDB"
+	default:
+		return "OK 0\n.\n"
+	}
+
+	letters := s.getLetterCounts(category, source)
+	if len(letters) == 0 {
+		return "OK 0\n.\n"
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("OK %d\n", len(letters)))
+	for _, l := range letters {
+		b.WriteString(fmt.Sprintf("%s|%d\n", l.letter, l.count))
+	}
+	b.WriteString(".\n")
+	return b.String()
+}
+
+func (s *SQLiteServer) formatSourceMenu(category string, sources []struct {
+	name   string
+	source string
+}) string {
+	var entries []string
+	for _, src := range sources {
+		var count int
+		s.db.conn.QueryRow(`SELECT COUNT(*) FROM entries WHERE category = ? AND source = ?`, category, src.source).Scan(&count)
+		if count > 0 {
+			// Type 'f' for folder (navigates to source submenu)
+			entries = append(entries, fmt.Sprintf("f|%s|%s/%s|%d", src.name, category, src.source, count))
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("OK %d\n", len(entries)))
+	for _, e := range entries {
+		b.WriteString(e + "\n")
+	}
+	b.WriteString(".\n")
+	return b.String()
+}
+
+func (s *SQLiteServer) getYearMenu(category, source string) string {
+	rows, err := s.db.conn.Query(`
+		SELECT year, COUNT(*) as cnt
+		FROM entries
+		WHERE category = ? AND source = ? AND year IS NOT NULL AND year != ''
+		GROUP BY year
+		ORDER BY year DESC`, category, source)
+	if err != nil {
+		return "OK 0\n.\n"
+	}
+	defer rows.Close()
+
+	var entries []string
+	for rows.Next() {
+		var year string
+		var count int
+		if err := rows.Scan(&year, &count); err == nil {
+			entries = append(entries, fmt.Sprintf("l|%s|%s/%s/Year/%s|%d", year, category, source, year, count))
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("OK %d\n", len(entries)))
+	for _, e := range entries {
+		b.WriteString(e + "\n")
+	}
+	b.WriteString(".\n")
+	return b.String()
+}
+
+func (s *SQLiteServer) getYearTop20Menu(category, source string) string {
+	rows, err := s.db.conn.Query(`
+		SELECT year, COUNT(*) as cnt
+		FROM entries
+		WHERE category = ? AND source = ? AND year_rank IS NOT NULL
+		GROUP BY year
+		ORDER BY year DESC`, category, source)
+	if err != nil {
+		return "OK 0\n.\n"
+	}
+	defer rows.Close()
+
+	var entries []string
+	for rows.Next() {
+		var year string
+		var count int
+		if err := rows.Scan(&year, &count); err == nil {
+			entries = append(entries, fmt.Sprintf("l|%s|%s/%s/Year-top20/%s|%d", year, category, source, year, count))
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("OK %d\n", len(entries)))
+	for _, e := range entries {
+		b.WriteString(e + "\n")
+	}
+	b.WriteString(".\n")
+	return b.String()
+}
+
+func (s *SQLiteServer) getOnefileLetters() string {
+	rows, err := s.db.conn.Query(`
+		SELECT
+			CASE
+				WHEN SUBSTR(UPPER(normalized_title), 1, 1) BETWEEN 'A' AND 'Z'
+				THEN SUBSTR(UPPER(normalized_title), 1, 1)
+				ELSE '#'
+			END as letter,
+			COUNT(*) as cnt
+		FROM entries
+		WHERE category = 'Demos' AND source = 'CSDB' AND is_onefile = 1
+		GROUP BY letter
+		ORDER BY CASE WHEN letter = '#' THEN 0 ELSE 1 END, letter`)
+	if err != nil {
+		return "OK 0\n.\n"
+	}
+	defer rows.Close()
+
+	var entries []string
+	for rows.Next() {
+		var letter string
+		var count int
+		if err := rows.Scan(&letter, &count); err == nil {
+			entries = append(entries, fmt.Sprintf("l|%s|Demos/CSDB/Onefile/%s|%d", letter, letter, count))
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("OK %d\n", len(entries)))
+	for _, e := range entries {
+		b.WriteString(e + "\n")
+	}
+	b.WriteString(".\n")
+	return b.String()
+}
+
+// HandleListPath returns entries matching a path using SQL, grouped by title.
+// This matches the JSON server behavior - entries with same normalized title are
+// grouped together with a count, allowing the user to select and see all releases.
+// The letter parameter is optional - if provided, it filters by first letter of title.
+func (s *SQLiteServer) HandleListPath(path string, offset, count int, letter string) string {
+	// Parse path to determine category, source, and filters
+	parts := strings.Split(path, "/")
+	if len(parts) < 1 {
+		return "OK 0 0\n.\n"
+	}
+
+	category := parts[0]
+	var source string
+	var letterFilter string
+
+	// Use provided letter parameter if given
+	if letter != "" {
+		letterFilter = strings.ToUpper(letter)
+	}
+
+	// Graphics and Discmags have only one source (CSDB)
+	if category == "Graphics" || category == "Discmags" {
+		source = "CSDB"
+	} else if len(parts) >= 2 {
+		source = parts[1]
+	} else {
+		return "OK 0 0\n.\n"
+	}
+
+	// Build query based on path
+	var whereClause string
+	var args []interface{}
+
+	whereClause = "category = ? AND source = ?"
+	args = append(args, category, source)
+
+	// Check for special paths
+	if len(parts) >= 3 {
+		subPath := parts[2]
+		switch subPath {
+		case "Top200":
+			whereClause += " AND top200_rank IS NOT NULL"
+		case "Top500":
+			whereClause += " AND top500_rank IS NOT NULL"
+		case "4k":
+			whereClause += " AND is_4k = 1"
+		case "Onefile":
+			whereClause += " AND is_onefile = 1"
+			if len(parts) >= 4 {
+				letterFilter = parts[3]
+			}
+		case "Year":
+			if len(parts) >= 4 {
+				whereClause += " AND year = ?"
+				args = append(args, parts[3])
+			}
+		case "Year-top20":
+			whereClause += " AND year_rank IS NOT NULL"
+			if len(parts) >= 4 {
+				whereClause += " AND year = ?"
+				args = append(args, parts[3])
+			}
+		default:
+			// It's a letter
+			if len(subPath) == 1 && ((subPath >= "A" && subPath <= "Z") || subPath == "#") {
+				letterFilter = subPath
+			}
+		}
+	}
+
+	// Apply letter filter
+	if letterFilter != "" {
+		if letterFilter == "#" {
+			whereClause += " AND (normalized_title < 'a' OR normalized_title >= '{')"
+		} else {
+			letter := strings.ToLower(letterFilter)
+			whereClause += " AND normalized_title >= ? AND normalized_title < ?"
+			args = append(args, letter, string(letter[0]+1))
+		}
+	}
+
+	// Always group by title - this is the expected behavior
+	return s.handleGroupedList(whereClause, args, offset, count)
+}
+
+func (s *SQLiteServer) handleGroupedList(whereClause string, args []interface{}, offset, count int) string {
+	// Get total count of distinct titles
+	countQuery := fmt.Sprintf(`SELECT COUNT(DISTINCT normalized_title) FROM entries WHERE %s`, whereClause)
+	var total int
+	s.db.conn.QueryRow(countQuery, args...).Scan(&total)
+
+	if offset >= total {
+		return fmt.Sprintf("OK 0 %d\n.\n", total)
+	}
+
+	// Get grouped entries with first entry ID, max trainers, and category
+	query := fmt.Sprintf(`
+		SELECT MIN(id), title, category, COUNT(*) as release_count, MAX(COALESCE(trainers, -1)) as max_trainers
+		FROM entries
+		WHERE %s
+		GROUP BY normalized_title
+		ORDER BY normalized_title
+		LIMIT ? OFFSET ?`, whereClause)
+
+	args = append(args, count, offset)
+	rows, err := s.db.conn.Query(query, args...)
+	if err != nil {
+		return fmt.Sprintf("OK 0 %d\n.\n", total)
+	}
+	defer rows.Close()
+
+	var results []string
+	for rows.Next() {
+		var id int64
+		var title, category string
+		var releaseCount, maxTrainers int
+		if err := rows.Scan(&id, &title, &category, &releaseCount, &maxTrainers); err == nil {
+			// Format: ID|Name|Category|Count|Trainers (same as JSON server)
+			results = append(results, fmt.Sprintf("%d|%s|%s|%d|%d", id, title, category, releaseCount, maxTrainers))
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("OK %d %d\n", len(results), total))
+	for _, r := range results {
+		b.WriteString(r + "\n")
+	}
+	b.WriteString(".\n")
+	return b.String()
+}
+
+// HandleSearch performs full-text search using FTS5.
+func (s *SQLiteServer) HandleSearch(query, category string, offset, count int) string {
+	// Escape special FTS characters
+	ftsQuery := strings.ReplaceAll(query, "\"", "\"\"")
+	ftsQuery = "\"" + ftsQuery + "\"*"
+
+	var whereClause string
+	var args []interface{}
+
+	whereClause = "entries_fts MATCH ?"
+	args = append(args, ftsQuery)
+
+	if category != "" && !strings.EqualFold(category, "All") {
+		whereClause += " AND e.category = ?"
+		args = append(args, category)
+	}
+
+	// Get total count
+	countQuery := fmt.Sprintf(`
+		SELECT COUNT(*) FROM entries e
+		JOIN entries_fts ON e.id = entries_fts.rowid
+		WHERE %s`, whereClause)
+	var total int
+	s.db.conn.QueryRow(countQuery, args...).Scan(&total)
+
+	if offset >= total {
+		return fmt.Sprintf("OK 0 %d\n.\n", total)
+	}
+
+	// Get results
+	selectQuery := fmt.Sprintf(`
+		SELECT e.id, e.title, e.category, COALESCE(e.trainers, -1) as trainers
+		FROM entries e
+		JOIN entries_fts ON e.id = entries_fts.rowid
+		WHERE %s
+		ORDER BY rank
+		LIMIT ? OFFSET ?`, whereClause)
+
+	args = append(args, count, offset)
+	rows, err := s.db.conn.Query(selectQuery, args...)
+	if err != nil {
+		return fmt.Sprintf("OK 0 %d\n.\n", total)
+	}
+	defer rows.Close()
+
+	var results []string
+	for rows.Next() {
+		var id int64
+		var title, cat string
+		var trainers int
+		if err := rows.Scan(&id, &title, &cat, &trainers); err == nil {
+			// Format: ID|Name|Category|Count|Trainers (Count=1 for search results)
+			results = append(results, fmt.Sprintf("%d|%s|%s|1|%d", id, title, cat, trainers))
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("OK %d %d\n", len(results), total))
+	for _, r := range results {
+		b.WriteString(r + "\n")
+	}
+	b.WriteString(".\n")
+	return b.String()
+}
+
+// HandleInfo returns detailed information about an entry.
+// Format: OK\n followed by LABEL|value lines, ending with .\n
+func (s *SQLiteServer) HandleInfo(id int64) string {
+	entry, err := s.db.GetEntryByID(id)
+	if err != nil || entry == nil {
+		return "ERR Entry not found\n"
+	}
+
+	var b strings.Builder
+	b.WriteString("OK\n")
+	b.WriteString(fmt.Sprintf("NAME|%s\n", entry.Title))
+	b.WriteString(fmt.Sprintf("GROUP|%s\n", entry.GroupName))
+	if entry.Year != "" {
+		b.WriteString(fmt.Sprintf("YEAR|%s\n", entry.Year))
+	}
+	b.WriteString(fmt.Sprintf("TYPE|%s\n", entry.FileType))
+	if entry.ReleaseName != "" {
+		b.WriteString(fmt.Sprintf("REL|%s\n", entry.ReleaseName))
+	}
+	if entry.Author != "" {
+		b.WriteString(fmt.Sprintf("AUTHOR|%s\n", entry.Author))
+	}
+	if entry.Top200Rank != nil {
+		b.WriteString(fmt.Sprintf("TOP200|#%d\n", *entry.Top200Rank))
+	}
+	if entry.Rating != nil && *entry.Rating > 0 {
+		b.WriteString(fmt.Sprintf("RATING|%.1f\n", *entry.Rating))
+	}
+	b.WriteString(".\n")
+	return b.String()
+}
+
+// HandleReleases returns all releases with the same normalized title.
+func (s *SQLiteServer) HandleReleases(path, title string, offset, count int) string {
+	normalizedTitle := normalizeTitle(title)
+
+	// Parse path for category/source filtering
+	parts := strings.Split(path, "/")
+	var category, source string
+	if len(parts) >= 1 {
+		category = parts[0]
+	}
+
+	// Graphics and Discmags have only one source (CSDB), so path is Category/Letter
+	// Other categories have Category/Source/Letter format
+	if category == "Graphics" || category == "Discmags" {
+		source = "CSDB"
+	} else if len(parts) >= 2 {
+		// Check if parts[1] is a letter (single char) or a source name
+		if len(parts[1]) == 1 && ((parts[1] >= "A" && parts[1] <= "Z") || parts[1] == "#") {
+			// It's a letter, not a source - don't filter by source
+			source = ""
+		} else {
+			source = parts[1]
+		}
+	}
+
+	// Build query
+	whereClause := "normalized_title = ?"
+	args := []interface{}{normalizedTitle}
+
+	if category != "" {
+		whereClause += " AND category = ?"
+		args = append(args, category)
+	}
+	if source != "" {
+		whereClause += " AND source = ?"
+		args = append(args, source)
+	}
+
+	// Get total count
+	var total int
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM entries WHERE %s`, whereClause)
+	s.db.conn.QueryRow(countQuery, args...).Scan(&total)
+
+	if offset >= total {
+		return fmt.Sprintf("OK 0 %d\n.\n", total)
+	}
+
+	// Get releases
+	query := fmt.Sprintf(`
+		SELECT id, group_name, year, file_type, COALESCE(trainers, -1) as trainers
+		FROM entries
+		WHERE %s
+		ORDER BY group_name, year
+		LIMIT ? OFFSET ?`, whereClause)
+
+	args = append(args, count, offset)
+	rows, err := s.db.conn.Query(query, args...)
+	if err != nil {
+		return fmt.Sprintf("OK 0 %d\n.\n", total)
+	}
+	defer rows.Close()
+
+	var results []string
+	for rows.Next() {
+		var id int64
+		var group, year, fileType string
+		var trainers int
+		if err := rows.Scan(&id, &group, &year, &fileType, &trainers); err == nil {
+			// Format: ID|Group|Year|Type|Trainers (name omitted since all same title)
+			results = append(results, fmt.Sprintf("%d|%s|%s|%s|%d", id, group, year, fileType, trainers))
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("OK %d %d\n", len(results), total))
+	for _, r := range results {
+		b.WriteString(r + "\n")
+	}
+	b.WriteString(".\n")
+	return b.String()
+}
+
+// GetFilePath returns the full path to the primary file of an entry.
+func (s *SQLiteServer) GetFilePath(id int64) (string, error) {
+	entry, err := s.db.GetEntryByID(id)
+	if err != nil || entry == nil {
+		return "", fmt.Errorf("entry not found")
+	}
+
+	return filepath.Join(s.assembly64Path, entry.Path, entry.PrimaryFile), nil
+}

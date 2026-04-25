@@ -1,6 +1,6 @@
 # C64 Protocol Specification
 
-**Current version**: 1.0
+**Current version**: 2.0
 
 ## Overview
 
@@ -9,7 +9,7 @@ The protocol uses TCP connections with plain text commands and responses, making
 
 ## Connection Flow
 
-1. Client establishes TCP connection to server (default port varies)
+1. Client establishes TCP connection to server (default port 6465)
 2. Server sends greeting: `OK c64uploader\n`
 3. Client sends commands, server responds
 4. Connection remains open until client sends `QUIT` or timeout occurs (5 minutes of inactivity)
@@ -21,7 +21,8 @@ The protocol uses TCP connections with plain text commands and responses, making
 - **Text-based**: All data is transmitted as ASCII text
 - **Stateless**: Each command is independent
 - **Connection timeout**: 5 minutes of inactivity
-- **Default page size**: 20 entries per page (for results paging)
+- **Item limit**: Server never sends more than 20 items per response (C64 memory constraint)
+- **Response terminator**: All multi-line responses end with `.\n`
 
 ## Command Format
 
@@ -54,241 +55,261 @@ The `.` (period) character on its own line indicates the end of multi-line respo
 
 ## Command Reference
 
-### 1. CATS - List Categories
+### 1. MENU - Navigate Menu Hierarchy
 
-The `CATS` command retrieves all available categories from the database. Categories include the count of entries in each category.
-This is the first command a client issues to populate the category menu.
+The `MENU` command navigates the hierarchical menu structure. It returns menu items with their types, allowing the client to display and navigate through categories, sources, and browse options.
 
 #### Syntax
 ```
-CATS
+MENU [path]
 ```
 
 #### Arguments
-None
+- `path`: (Optional) Menu path to navigate to. If empty, returns root menu.
 
 #### Response Format
 ```
 OK <count>\n
-<category1>|<count1>\n
-<category2>|<count2>\n
+<type>|<name>|<path>|<count>\n
+<type>|<name>|<path>|<count>\n
 ...
 .\n
 ```
 
-- `count`: Total number of categories
-- Each category line contains: `category_name|entry_count`
-- Lines are pipe-delimited (`|`)
+- `count`: Number of items returned (max 20)
+- `type`: Item type code:
+  - `f` = folder (navigate deeper with MENU)
+  - `b` = browse (use LETTERS command for letter picker)
+  - `l` = list (use LISTPATH to get entries)
+- `name`: Display name for the item
+- `path`: Full path for this item (used in subsequent commands)
+- `count`: Number of entries (for display purposes)
+
+#### Examples
+
+**Example 1: Root menu**
+
+Request:
+```
+MENU
+```
+
+Response:
+```
+OK 6
+f|Games|Games|25000
+f|Demos|Demos|15000
+f|Music|Music|50000
+f|Intros|Intros|3000
+f|Graphics|Graphics|1500
+f|Discmags|Discmags|500
+.
+```
+
+**Example 2: Games source menu**
+
+Request:
+```
+MENU Games/CSDB
+```
+
+Response:
+```
+OK 3
+b|Browse A-Z|Games/CSDB|8500
+l|Top 200|Games/CSDB/Top200|200
+l|By Year|Games/CSDB/ByYear|8500
+.
+```
+
+---
+
+### 2. LETTERS - Get Letter Counts for Browse
+
+The `LETTERS` command returns available first letters and their entry counts for the letter picker UI. Used when the client selects a type `b` (browse) item.
+
+#### Syntax
+```
+LETTERS <path>
+```
+
+#### Arguments
+- `path`: The browse path (from MENU response)
+
+#### Response Format
+```
+OK <count>\n
+<letter>|<count>\n
+<letter>|<count>\n
+...
+.\n
+```
+
+- `count`: Number of letters with entries
+- `letter`: Single character (A-Z or # for non-alphabetic)
+- `count`: Number of entries starting with that letter
 
 #### Example
 
-**Request:**
+Request:
 ```
-CATS
+LETTERS Games/CSDB
 ```
 
-**Response:**
+Response:
 ```
-OK 8
-Demo|1523
-Crack Intro|342
-Game|2891
-Music|156
-Graphics|89
-Tool|213
-Magazine|45
-Misc|127
+OK 27
+#|42
+A|523
+B|412
+C|389
+D|256
+E|178
+...
+Z|23
 .
 ```
 
 ---
 
-### 2. LIST - List Category Entries
+### 3. LISTPATH - List Entries at Path
 
-The `LIST` command is used to browse entries within a specific category.
-It supports pagination through `offset` and `count` parameters, allowing clients to load data in manageable chunks.
+The `LISTPATH` command retrieves entries at a specific path with optional letter filtering. Used for browsing entries grouped by title.
 
 #### Syntax
 ```
-LIST <category> <offset> <count>
+LISTPATH <offset> <count> <path> [letter]
 ```
 
 #### Arguments
-- `category`: Category name (case-insensitive)
 - `offset`: Starting index, 0-based
-- `count`: Number of entries to return (use 0 to return all from offset)
+- `count`: Number of entries to return (max 20)
+- `path`: Path to list entries from
+- `letter`: (Optional) Filter to entries starting with this letter (A-Z or # for non-alpha)
 
 #### Response Format
 ```
-OK <returned_count> <total_count>\n
-<id1>|<name1>|<group1>|<year1>|<type1>\n
-<id2>|<name2>|<group2>|<year2>|<type2>\n
+OK <returned> <total>\n
+<id>|<name>|<category>|<release_count>|<trainers>\n
 ...
 .\n
 ```
 
-- `returned_count`: Number of entries in this response
-- `total_count`: Total entries available in the category
-- Each entry line contains: `id|name|group|year|file_type`
-- Fields are pipe-delimited (`|`)
+- `returned`: Number of entries in this response
+- `total`: Total entries matching the query
+- `id`: Entry ID (for RUN/INFO commands)
+- `name`: Entry title
+- `category`: Category abbreviation
+- `release_count`: Number of releases for this title
+- `trainers`: Trainer count (-1 if unknown)
 
 #### Examples
 
-**Example 1: First page of games**
+**Example 1: All entries at path**
 
 Request:
 ```
-LIST Game 0 20
+LISTPATH 0 20 Games/CSDB
 ```
 
 Response:
 ```
-OK 20 2891
-0|Arkanoid|Taito|1987|prg
-1|Boulder Dash|First Star|1984|prg
-2|Commando|Elite|1985|prg
-3|Defender of the Crown|Cinemaware|1987|d64
-4|Elite|Firebird|1985|prg
-5|Ghosts 'n Goblins|Elite|1986|d64
-6|IK+|System 3|1987|prg
-7|Last Ninja|System 3|1987|d64
-8|Maniac Mansion|Lucasfilm|1988|d64
-9|Paradroid|Hewson|1985|prg
-10|Pirates!|MicroProse|1987|d64
-11|R-Type|Electric Dreams|1988|crt
-12|Summer Games|Epyx|1984|prg
-13|Turrican|Rainbow Arts|1990|d64
-14|Uridium|Hewson|1986|prg
-15|Winter Games|Epyx|1985|d64
-16|Wizball|Ocean|1987|d64
-17|Zak McKracken|Lucasfilm|1988|d64
-18|1942|Elite|1986|prg
-19|Barbarian|Palace|1987|d64
+OK 20 8500
+12345|Arkanoid|Games|3|2
+12346|Boulder Dash|Games|5|0
+...
 .
 ```
 
-**Example 2: Second page with custom count**
+**Example 2: Entries starting with 'A'**
 
 Request:
 ```
-LIST Game 20 10
+LISTPATH 0 20 Games/CSDB A
 ```
 
 Response:
 ```
-OK 10 2891
-20|Bruce Lee|Datasoft|1984|prg
-21|Bubble Bobble|Firebird|1987|d64
-22|California Games|Epyx|1987|d64
-23|Castlevania|Konami|1990|crt
-24|Choplifter|Broderbund|1982|prg
-25|Creatures|Thalamus|1990|d64
-26|Decathlon|Activision|1983|prg
-27|Golden Axe|Virgin|1990|d64
-28|Impossible Mission|Epyx|1984|prg
-29|Jumpman|Epyx|1983|prg
+OK 20 523
+12345|Arkanoid|Games|3|2
+12350|Ace of Aces|Games|2|0
+...
 .
 ```
-
-**Example 3: Invalid category**
-
-Request:
-```
-LIST InvalidCategory
-```
-
-Response:
-```
-ERR Unknown category: InvalidCategory
-```
-
-**Example 4: Offset beyond available entries**
-
-Request:
-```
-LIST Demo 5000 20
-```
-
-Response:
-```
-OK 0 1523
-.
-```
-
 
 ---
 
-### 3. SEARCH - Search Entries
+### 4. RELEASES - Get All Releases of a Title
 
-The `SEARCH` command performs a case-insensitive substring search across both the `Name` and `Group` fields of entries.
-The query can contain multiple words.
-Results are returned in the order they appear in the database.
-
-An optional category filter can be specified to limit results to a specific category (Games, Demos, Music).
-
+The `RELEASES` command retrieves all variant releases of a specific title. Used when an entry has multiple releases (release_count > 1).
 
 #### Syntax
 ```
-SEARCH <offset> <count> <query>
-SEARCH <offset> <count> <category> <query>
+RELEASES <offset> <count> <path> <title>
 ```
 
 #### Arguments
 - `offset`: Starting index, 0-based
-- `count`: Number of results to return (use 0 to return all from offset)
-- `category`: (Optional) Category to filter by (Games, Demos, Music, or All). If omitted or "All", searches all categories.
-- `query`: Search term (case-insensitive, can be multi-word)
+- `count`: Number of entries to return (max 20)
+- `path`: Category/source path
+- `title`: Exact title to match
 
 #### Response Format
 ```
-OK <returned_count> <total_count>\n
-<id1>|<name1>|<group1>|<year1>|<type1>\n
-<id2>|<name2>|<group2>|<year2>|<type2>\n
+OK <returned> <total>\n
+<id>|<group>|<year>|<type>|<trainers>\n
 ...
 .\n
 ```
 
-Same format as `LIST` command.
+- `id`: Entry ID (for RUN/INFO commands)
+- `group`: Release group/publisher
+- `year`: Release year
+- `type`: File type (prg, d64, crt, etc.)
+- `trainers`: Trainer count
 
-#### Examples
-
-**Example 1: Search for "ninja"**
+#### Example
 
 Request:
 ```
-SEARCH 0 0 ninja
+RELEASES 0 20 Games/CSDB Arkanoid
 ```
 
 Response:
 ```
-OK 5 5
-7|Last Ninja|System 3|1987|d64
-145|Last Ninja 2|System 3|1988|d64
-289|Last Ninja 3|System 3|1991|d64
-421|Ninja|Sculptured Software|1986|prg
-892|Shadow of the Ninja|Natsume|1990|d64
+OK 3 3
+12345|Imagine|1987|d64|0
+12346|Triangle|1988|prg|2
+12347|Nostalgia|2010|prg|0
 .
 ```
 
-**Example 2: Search with pagination**
+---
 
-Request:
-```
-SEARCH 0 5 demo
-```
+### 5. SEARCH - Search Entries
 
-Response:
+The `SEARCH` command performs a text search across entry titles and groups.
+
+#### Syntax
 ```
-OK 5 156
-12|Coma Light 13|Oxyron|2001|prg
-45|State of the Art|Spaceballs|1992|d64
-78|Edge of Disgrace|Booze Design|1993|d64
-112|Desert Dream|Kefrens|1993|d64
-156|Deus Ex Machina|Crest|2014|prg
-.
+SEARCH <offset> <count> [category] <query>
 ```
 
-**Example 3: Search with category filter**
+#### Arguments
+- `offset`: Starting index, 0-based
+- `count`: Number of results to return (max 20)
+- `category`: (Optional) Category filter (Games, Demos, Music)
+- `query`: Search term (case-insensitive)
+
+#### Response Format
+```
+OK <returned> <total>\n
+<id>|<name>|<group>|<year>|<type>\n
+...
+.\n
+```
+
+#### Example
 
 Request:
 ```
@@ -297,51 +318,20 @@ SEARCH 0 20 Games ninja
 
 Response:
 ```
-OK 3 3
-7|Last Ninja|System 3|1987|d64
-145|Last Ninja 2|System 3|1988|d64
-289|Last Ninja 3|System 3|1991|d64
+OK 5 5
+12400|Last Ninja|System 3|1987|d64
+12401|Last Ninja 2|System 3|1988|d64
+12402|Last Ninja 3|System 3|1991|d64
+12403|Ninja|Sculptured|1986|prg
+12404|Shadow Ninja|Natsume|1990|d64
 .
 ```
-
-**Example 4: Search Music category**
-
-Request:
-```
-SEARCH 0 10 Music commando
-```
-
-Response:
-```
-OK 2 2
-50123|Commando|Rob Hubbard||sid
-50456|Commando Remix|Various||sid
-.
-```
-
-**Example 5: No matches**
-
-Request:
-```
-SEARCH 0 0 qwertyzxcv
-```
-
-Response:
-```
-OK 0 0
-.
-```
-
 
 ---
 
-### 4. INFO - Get Entry Details
+### 6. INFO - Get Entry Details
 
-The `INFO` command retrieves all metadata for a specific entry.
-This includes the entry's name, group/publisher, release year, category, file type, and relative path within the archive.
-Clients typically use this before running an entry or to display detailed information to the user.
-
-Note that metadata can be incomplete for some entries.
+The `INFO` command retrieves detailed metadata for a specific entry.
 
 #### Syntax
 ```
@@ -349,7 +339,7 @@ INFO <id>
 ```
 
 #### Arguments
-- `id`: Entry ID (numeric, obtained from LIST or SEARCH)
+- `id`: Entry ID (from LISTPATH, RELEASES, or SEARCH)
 
 #### Response Format
 ```
@@ -363,15 +353,11 @@ PATH|<relative_path>\n
 .\n
 ```
 
-Each field is on its own line with format: `FIELD|value`
-
-#### Examples
-
-**Example 1: Valid entry**
+#### Example
 
 Request:
 ```
-INFO 7
+INFO 12400
 ```
 
 Response:
@@ -380,38 +366,17 @@ OK
 NAME|Last Ninja
 GROUP|System 3
 YEAR|1987
-CAT|Game
+CAT|Games
 TYPE|d64
 PATH|Games/L/Last_Ninja.d64
 .
 ```
 
-**Example 2: Invalid ID**
-
-Request:
-```
-INFO 99999
-```
-
-Response:
-```
-ERR Invalid ID
-```
-
 ---
 
-### 5. RUN - Execute Entry
+### 7. RUN - Execute Entry
 
-The `RUN` command will instruct the server to upload the specified entry from the server archive to the C64 Ultimate hardware via its REST API and execute it.
-
-The behavior depends on the file type:
-
-- **PRG files**: Loaded directly into memory and executed
-- **CRT files**: Cartridge image is mounted
-- **SID files**: Music file is played using the Ultimate's SID player
-- **D64/G64/D71/D81 files**: Disk image is mounted, first program is loaded directly into memory and executed
-
-Supported file types: `prg`, `crt`, `sid`, `d64`, `g64`, `d71`, `d81`
+The `RUN` command uploads and executes an entry on the C64 Ultimate hardware.
 
 #### Syntax
 ```
@@ -419,184 +384,63 @@ RUN <id>
 ```
 
 #### Arguments
-- `id`: Entry ID (numeric, obtained from LIST or SEARCH)
+- `id`: Entry ID
 
 #### Response Format
-
-**Success:**
 ```
 OK Running <entry_name>\n
 ```
 
-**Error:**
+or
+
 ```
 ERR <error_message>\n
 ```
 
-#### Examples
+#### Behavior by File Type
 
-**Example 1: Run an entry**
-
-Request:
-```
-RUN 0
-```
-
-Response:
-```
-OK Running Arkanoid
-```
-
-**Example 2: Invalid ID**
-
-Request:
-```
-RUN 99999
-```
-
-Response:
-```
-ERR Invalid ID
-```
-
+- **PRG files**: Loaded into memory and executed
+- **CRT files**: Cartridge image is mounted
+- **SID files**: Music is played via Ultimate's SID player
+- **D64/G64/D71/D81**: Disk image mounted, first program loaded and run
 
 ---
 
-### 6. ADVSEARCH - Advanced Search
+### 8. QUIT - Close Connection
 
-The `ADVSEARCH` command performs an advanced search with multiple filter parameters.
-Unlike the simple `SEARCH` command, this allows filtering by category, title, group, file type, and Top200 status using key=value pairs.
-
-#### Syntax
-```
-ADVSEARCH <offset> <count> [key=value ...]
-```
-
-#### Arguments
-- `offset`: Starting index, 0-based
-- `count`: Number of results to return (use 0 to return all from offset)
-- `key=value`: Optional filter parameters (see below)
-
-#### Filter Parameters
-
-| Key | Description | Example |
-|-----|-------------|---------|
-| `cat` | Category filter (Games, Demos, Music, All) | `cat=Games` |
-| `title` | Partial match on title | `title=ninja` |
-| `group` | Partial match on group/publisher | `group=system` |
-| `type` | File type filter (d64, prg, crt, sid) | `type=d64` |
-| `top200` | Show only Top200 entries (1=yes) | `top200=1` |
-
-#### Response Format
-```
-OK <returned_count> <total_count>\n
-<id1>|<name1>|<group1>|<year1>|<type1>\n
-<id2>|<name2>|<group2>|<year2>|<type2>\n
-...\n
-.\n
-```
-
-Same format as `LIST` and `SEARCH` commands.
-
-#### Examples
-
-**Example 1: Search Games containing "ninja" in title**
-
-Request:
-```
-ADVSEARCH 0 20 cat=Games title=ninja
-```
-
-Response:
-```
-OK 3 3
-7|Last Ninja|System 3|1987|d64
-145|Last Ninja 2|System 3|1988|d64
-289|Last Ninja 3|System 3|1991|d64
-.
-```
-
-**Example 2: Search Top200 games only**
-
-Request:
-```
-ADVSEARCH 0 20 cat=Games top200=1
-```
-
-Response:
-```
-OK 20 200
-1|Uridium|Hewson|1986|prg
-2|Paradroid|Hewson|1985|prg
-...
-.
-```
-
-**Example 3: Search for SID files**
-
-Request:
-```
-ADVSEARCH 0 10 type=sid
-```
-
-Response:
-```
-OK 10 50000
-50001|Commando|Rob Hubbard||sid
-50002|Delta|Rob Hubbard||sid
-...
-.
-```
-
-**Example 4: Combined filters**
-
-Request:
-```
-ADVSEARCH 0 20 cat=Games type=prg group=hewson
-```
-
-Response:
-```
-OK 5 5
-1|Uridium|Hewson|1986|prg
-2|Paradroid|Hewson|1985|prg
-...
-.
-```
-
-
----
-
-### 7. QUIT - Close Connection
-
-The `QUIT` command allows the client to close the connection gracefully.
-After sending the goodbye message, the server immediately closes the TCP connection.
+The `QUIT` command closes the connection gracefully.
 
 #### Syntax
 ```
 QUIT
 ```
 
-#### Arguments
-None
-
-#### Response Format
+#### Response
 ```
 OK Goodbye\n
 ```
 
 Server closes connection after sending this response.
 
-#### Example
+---
 
-Request:
-```
-QUIT
-```
+## Navigation Flow
 
-Response:
-```
-OK Goodbye
-```
+The typical navigation flow for the C64 client:
 
-*(Connection closes)*
+1. **Root Menu**: `MENU` -> displays categories (Games, Demos, Music, etc.)
+2. **Category Menu**: `MENU Games` -> displays sources (CSDB, Gamebase, etc.)
+3. **Source Menu**: `MENU Games/CSDB` -> displays navigation options
+4. **Letter Picker**: `LETTERS Games/CSDB` -> user selects a letter
+5. **Entry List**: `LISTPATH 0 20 Games/CSDB A` -> displays entries starting with 'A'
+6. **Releases**: `RELEASES 0 20 Games/CSDB "Arkanoid"` -> shows all versions
+7. **Run**: `RUN 12345` -> executes the selected entry
+
+## Memory Constraints
+
+The C64 client has limited memory (MAX_ITEMS = 20). The server enforces this limit:
+- MENU responses: max 20 items
+- LETTERS responses: max 27 items (A-Z + #)
+- LISTPATH/RELEASES/SEARCH responses: max 20 items per page
+
+Pagination is handled client-side using offset/count parameters.

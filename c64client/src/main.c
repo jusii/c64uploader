@@ -29,15 +29,13 @@ static char server_host[32] = DEFAULT_SERVER_HOST;
 static byte socket_id = 0;
 static bool connected = false;
 
-// Pages: 0=cats, 1=list, 3=settings, 4=advsearch, 5=advresults, 6=info, 7=releases
-// Page 2 (PAGE_SEARCH) was a simple typing search mode that has no entry point
-// in the current UI; advanced search ('/' from root) replaced it. Constants
-// are kept numeric-stable so .lbl-based debug peeks across builds still line up.
+// Pages: 0=cats, 1=list, 2=search, 3=settings, 6=info, 7=releases.
+// Page 4 / 5 (advanced search) are gone — replaced by the simple typed-query
+// search at PAGE_SEARCH that drives the existing server SEARCH command.
 #define PAGE_CATS        0
 #define PAGE_LIST        1
+#define PAGE_SEARCH      2
 #define PAGE_SETTINGS    3
-#define PAGE_ADV_SEARCH  4
-#define PAGE_ADV_RESULTS 5
 #define PAGE_INFO        6
 #define PAGE_RELEASES    7
 
@@ -74,62 +72,13 @@ void run_myfile(const char *path);
 static bool is_letter_grid(void);
 void update_letter_grid_cursor(int old_cursor, int new_cursor);
 
-// Category labels shared by the advanced search form (cat= filter).
+// Simple search state. Server SEARCH command takes "<offset> <count>
+// [category] <query>" and returns id|name|group|year|type rows. Tab (C= key
+// in PETSCII, scancode 0x0F) cycles search_category through these labels.
 static const char *search_cat_names[] = {"All", "Games", "Demos", "Music"};
-
-// Advanced search form state
-#define ADV_FIELD_CAT     0
-#define ADV_FIELD_SOURCE  1
-#define ADV_FIELD_TITLE   2
-#define ADV_FIELD_GROUP   3
-#define ADV_FIELD_TYPE    4
-#define ADV_FIELD_SEARCH  5  // Execute search button
-#define ADV_FIELD_COUNT   6
-
-static int  adv_cursor = 0;           // Current field
-static bool adv_editing = false;      // Are we editing a text field?
-static int  adv_edit_pos = 0;         // Cursor position in edit
-
-// Advanced search field values
-static int  adv_category = 0;         // 0=All, 1=Games, 2=Demos, 3=Music
-static int  adv_source = 0;           // Index into current category's source array
-static char adv_title[24];
-static char adv_group[24];
-static int  adv_type = 0;             // 0=Any, 1=prg, 2=d64, 3=crt, 4=sid
-
-static const char *adv_type_names[] = {"Any", "prg", "d64", "crt", "sid", "tap", "t64", "d71", "d81", "g64"};
-
-// Source names per category (index 0 = "All" category uses all_sources)
-static const char *all_sources[] = {"Any", 0};
-static const char *games_sources[] = {"Any", "csdb", "c64com", "gamebase", "guybrush", "guybrush-ger", "oneload64", "mayhem-crt", "c64tapes", "preservers", "seuck", 0};
-static const char *demos_sources[] = {"Any", "csdb", "c64com", "guybrush", 0};
-static const char *music_sources[] = {"Any", "csdb", "hvsc", "2sid", "3sid", 0};
-static const char *intros_sources[] = {"Any", "csdb", "c64org", 0};
-static const char *graphics_sources[] = {"Any", "csdb", 0};
-static const char *discmags_sources[] = {"Any", "csdb", 0};
-
-// Map category index to sources array
-static const char **category_sources[] = {
-    all_sources,      // 0 = All
-    games_sources,    // 1 = Games
-    demos_sources,    // 2 = Demos
-    music_sources     // 3 = Music
-};
-
-// Get source count for current category
-static int get_source_count(void)
-{
-    const char **sources = category_sources[adv_category];
-    int count = 0;
-    while (sources[count] != 0) count++;
-    return count;
-}
-
-// Get current source name
-static const char *get_source_name(void)
-{
-    return category_sources[adv_category][adv_source];
-}
+static char search_query[24];
+static byte search_query_len = 0;
+static byte search_category = 0;
 
 // Settings edit state
 static int  settings_cursor = 0;  // Which setting is selected
@@ -154,7 +103,7 @@ static int  item_trainers[MAX_ITEMS];  // Trainer count per entry (-1=unknown, 0
 // Releases page state
 static char releases_title[32];        // Title being viewed
 static char releases_category[48];     // Path or category of releases
-static int  releases_return_page = PAGE_ADV_RESULTS;  // Where to return (PAGE_LIST or PAGE_ADV_RESULTS)
+static int  releases_return_page = PAGE_LIST;  // Where to return (PAGE_LIST or PAGE_SEARCH)
 static int  releases_return_offset = 0;  // Offset to restore when returning
 static int  releases_return_cursor = 0;  // Cursor position within page to restore
 
@@ -579,145 +528,56 @@ void run_myfile(const char *path)
     print_status(line_buffer);
 }
 
-// Execute advanced search (grouped mode)
-void do_adv_search(int start)
+// Drive the existing server SEARCH command. Response is one row per result,
+// "id|name|group|year|type" — we only render id+name; the rest is dropped on
+// the floor. category=0 ("All") sends no category arg, so the server runs
+// across all categories.
+void do_search(const char *query, int start)
 {
-    print_status("searching...");
-
-    // Build command: "ADVSEARCH offset count [key=value ...] grouped=1"
-    char cmd[160];
-    sprintf(cmd, "ADVSEARCH %d 20", start);
-
-    // Add category filter
-    if (adv_category > 0)
-    {
-        strcat(cmd, " cat=");
-        strcat(cmd, search_cat_names[adv_category]);
-    }
-
-    // Add source filter (only if not "Any")
-    if (adv_source > 0)
-    {
-        strcat(cmd, " source=");
-        strcat(cmd, get_source_name());
-    }
-
-    // Add title filter
-    if (adv_title[0])
-    {
-        strcat(cmd, " title=");
-        strcat(cmd, adv_title);
-    }
-
-    // Add group filter
-    if (adv_group[0])
-    {
-        strcat(cmd, " group=");
-        strcat(cmd, adv_group);
-    }
-
-    // Add file type filter
-    if (adv_type > 0)
-    {
-        strcat(cmd, " type=");
-        strcat(cmd, adv_type_names[adv_type]);
-    }
-
-    // Enable grouped mode
-    strcat(cmd, " grouped=1");
-
+    char cmd[64];
+    if (search_category == 0)
+        sprintf(cmd, "SEARCH %d 20 %s", start, query);
+    else
+        sprintf(cmd, "SEARCH %d 20 %s %s", start, search_cat_names[search_category], query);
     send_command(cmd);
-    read_line();  // "OK n total"
-
-    if (is_error_response())
-    {
+    read_line();
+    if (is_error_response()) {
         item_count = 0;
         total_count = 0;
         cursor = 0;
         print_status(line_buffer);
         return;
     }
-
-    // Parse "OK n total"
     char *p = line_buffer + 3;
     int n = atoi(p);
     p = strchr(p, ' ');
     if (p)
         total_count = atol(p + 1);
-
     item_count = 0;
     offset = start;
-
-    // Read entry lines until "."
-    // Grouped format: "id|name|category|count|trainers"
-    while (item_count < MAX_ITEMS && item_count < n)
-    {
+    while (item_count < MAX_ITEMS && item_count < n) {
         read_line();
         if (line_buffer[0] == '.')
             break;
-
-        // Parse "id|name|category|count|trainers"
         char *id_str = line_buffer;
         char *name = strchr(id_str, '|');
-        if (name)
-        {
-            *name++ = 0;
-            item_ids[item_count] = atol(id_str);
-
-            // Find category (next |)
-            char *cat = strchr(name, '|');
-            if (cat)
-            {
-                *cat++ = 0;
-                // Find count (next |)
-                char *cnt = strchr(cat, '|');
-                if (cnt)
-                {
-                    *cnt++ = 0;
-                    // Find trainers (next |)
-                    char *trn = strchr(cnt, '|');
-                    if (trn)
-                    {
-                        *trn++ = 0;
-                        item_trainers[item_count] = atoi(trn);
-                    }
-                    else
-                    {
-                        item_trainers[item_count] = -1;
-                    }
-                    item_counts[item_count] = atoi(cnt);
-                    strncpy(item_cats[item_count], cat, 7);
-                    item_cats[item_count][7] = 0;
-                }
-                else
-                {
-                    item_counts[item_count] = 1;
-                    item_cats[item_count][0] = 0;
-                    item_trainers[item_count] = -1;
-                }
-            }
-            else
-            {
-                item_counts[item_count] = 1;
-                item_cats[item_count][0] = 0;
-                item_trainers[item_count] = -1;
-            }
-
-            strncpy(item_names[item_count], name, 31);
-            item_names[item_count][31] = 0;
-            item_count++;
-        }
+        if (!name)
+            continue;
+        *name++ = 0;
+        item_ids[item_count] = atol(id_str);
+        char *end = strchr(name, '|');
+        if (end)
+            *end = 0;
+        strncpy(item_names[item_count], name, 31);
+        item_names[item_count][31] = 0;
+        item_count++;
     }
-
-    // Consume remaining lines until "."
     {
         int safety = 100;
         while (line_buffer[0] != '.' && safety-- > 0)
             read_line();
     }
-
     cursor = 0;
-    print_status("ready");
 }
 
 // Fetch releases for a specific title
@@ -1030,40 +890,24 @@ char get_key(void)
                 }
             }
         }
-        // In advanced search form
-        else if (current_page == PAGE_ADV_SEARCH)
+        // In simple search (typed query + result list)
+        else if (current_page == PAGE_SEARCH)
         {
-            if (!adv_editing)
-            {
-                // Navigation
+            if (k == KSCAN_CSR_RIGHT && shift) return 8;  // Left = back
+            if (k == 0x0F) return '\t';  // C= = cycle category
+            if (item_count > 0) {
                 if (k == KSCAN_W || (k == KSCAN_CSR_DOWN && shift)) return 'u';
                 if (k == KSCAN_S || k == KSCAN_CSR_DOWN) return 'd';
-                if (k == KSCAN_CSR_RIGHT && shift) return 8;  // Left = back
-                if (k == KSCAN_SPACE) return ' ';  // Toggle/cycle
+                if (k == KSCAN_N) return 'n';
+                if (k == KSCAN_P) return 'p';
+                if (k == KSCAN_I) return 'i';
+                if (k == KSCAN_CSR_RIGHT && !shift) return '\r';
             }
-            else
-            {
-                // Editing text field - return typed characters
-                if (k < 64)
-                {
-                    byte c = (byte)keyb_codes[shift ? k + 64 : k];
-                    if (c >= 'a' && c <= 'z') return c - 32;  // Uppercase
-                    if (c >= 'A' && c <= 'Z') return c;
-                    if (c >= '0' && c <= '9') return c;
-                    if (c == ' ') return '_';  // Use underscore for spaces
-                }
+            if (k < 64) {
+                byte c = (byte)keyb_codes[shift ? k + 64 : k];
+                if (c >= 'a' && c <= 'z') return c - 32;
+                if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) return c;
             }
-        }
-        // In advanced search results
-        else if (current_page == PAGE_ADV_RESULTS)
-        {
-            if (k == KSCAN_W || (k == KSCAN_CSR_DOWN && shift)) return 'u';
-            if (k == KSCAN_S || k == KSCAN_CSR_DOWN) return 'd';
-            if (k == KSCAN_N) return 'n';
-            if (k == KSCAN_P) return 'p';
-            if (k == KSCAN_I) return 'i';  // Info
-            if (k == KSCAN_CSR_RIGHT && !shift) return '>';  // Right = enter releases
-            if (k == KSCAN_CSR_RIGHT && shift) return 8;  // Left = back
         }
         // In releases page
         else if (current_page == PAGE_RELEASES)
@@ -1121,37 +965,6 @@ void draw_item_at(int i, bool selected, byte row_offset)
     }
 }
 
-// Draw item for advanced results with grouped indicator and trainer count
-void draw_adv_item_at(int i, bool selected)
-{
-    byte y = i + 2;  // Row offset 2 for adv results
-    clear_line(y);
-    byte color = selected ? 1 : 14;
-
-    if (selected)
-        print_at_color(0, y, ">", 1);
-
-    print_at_color(2, y, item_names[i], color);
-
-    int name_len = strlen(item_names[i]);
-    int x = 2 + name_len + 1;
-
-    // Show trainer count if > 0
-    if (item_trainers[i] > 0)
-    {
-        char trn[6];
-        sprintf(trn, "+%d", item_trainers[i]);
-        print_at_color(x, y, trn, 13);  // Light green
-        x += strlen(trn) + 1;
-    }
-
-    // Show ">" indicator at end for grouped entries (count > 1)
-    if (item_counts[i] > 1)
-    {
-        print_at_color(x, y, ">", 5);  // Green arrow
-    }
-}
-
 // Draw item for normal list pages (row offset 4) - plain version
 void draw_item(int i, bool selected)
 {
@@ -1199,7 +1012,6 @@ void update_grouped_cursor(int old_cursor, int new_cursor)
 }
 
 // Update cursor display without full redraw (only redraws 2 lines)
-// row_offset: 4 for normal lists, 2 for adv results
 void update_cursor_at(int old_cursor, int new_cursor, byte row_offset)
 {
     if (old_cursor >= 0 && old_cursor < item_count)
@@ -1212,15 +1024,6 @@ void update_cursor_at(int old_cursor, int new_cursor, byte row_offset)
 void update_cursor(int old_cursor, int new_cursor)
 {
     update_cursor_at(old_cursor, new_cursor, 4);
-}
-
-// Update cursor for advanced results (preserves grouped indicator)
-void update_adv_cursor_results(int old_cursor, int new_cursor)
-{
-    if (old_cursor >= 0 && old_cursor < item_count)
-        draw_adv_item_at(old_cursor, false);
-    if (new_cursor >= 0 && new_cursor < item_count)
-        draw_adv_item_at(new_cursor, true);
 }
 
 // Letter-grid layout: 3 rows x 9 cols (A..Z + '#' = 27 cells). Each cell is
@@ -1285,6 +1088,18 @@ void draw_list(const char *title)
     // Title
     print_at_color(0, 0, title, 7);  // Yellow
 
+    // Search input row (PAGE_SEARCH only): "[CAT] query_"
+    if (current_page == PAGE_SEARCH)
+    {
+        print_at(0, 1, "[");
+        print_at_color(1, 1, search_cat_names[search_category], 5);
+        int x = 1 + strlen(search_cat_names[search_category]);
+        print_at(x, 1, "] ");
+        x += 2;
+        print_at(x, 1, search_query);
+        print_at(x + search_query_len, 1, "_");
+    }
+
     // Info line
     if (item_count > 0)
     {
@@ -1321,6 +1136,8 @@ void draw_list(const char *title)
         print_at(0, 23, "w/s:move enter:sel /:search c:cfg q:quit");
     else if (current_page == PAGE_LIST)
         print_at(0, 23, "w/s:move enter:run >:rel i:info del:bk n/p:pg");
+    else if (current_page == PAGE_SEARCH)
+        print_at(0, 23, "type:search c=:cat enter:run i:info del:bk");
 }
 
 void draw_settings(void)
@@ -1368,119 +1185,6 @@ void draw_settings(void)
         print_at(0, 23, "type ip  enter:done  del:erase");
     else
         print_at(0, 23, "w/s:move enter:edit/save del:back");
-}
-
-// Draw a single advanced search field (for partial updates)
-void draw_adv_field(int field, bool selected)
-{
-    byte y = 2 + field * 2;  // Fields at rows 2, 4, 6, 8, 10, 12
-    byte color = selected ? 1 : 14;
-
-    clear_line(y);
-
-    // Cursor indicator
-    if (selected)
-        print_at_color(0, y, ">", 1);
-
-    switch (field)
-    {
-    case ADV_FIELD_CAT:
-        print_at_color(2, y, "category:", color);
-        print_at_color(12, y, "[", color);
-        print_at_color(13, y, search_cat_names[adv_category], 5);
-        print_at_color(13 + strlen(search_cat_names[adv_category]), y, "]", color);
-        break;
-
-    case ADV_FIELD_SOURCE:
-        print_at_color(2, y, "source:", color);
-        print_at_color(10, y, "[", color);
-        print_at_color(11, y, get_source_name(), 5);
-        print_at_color(11 + strlen(get_source_name()), y, "]", color);
-        break;
-
-    case ADV_FIELD_TITLE:
-        print_at_color(2, y, "title:", color);
-        if (adv_editing && selected)
-        {
-            print_at_color(10, y, adv_title, 5);
-            print_at_color(10 + strlen(adv_title), y, "_", 5);
-        }
-        else if (adv_title[0])
-            print_at_color(10, y, adv_title, color);
-        else
-            print_at_color(10, y, "(any)", 11);
-        break;
-
-    case ADV_FIELD_GROUP:
-        print_at_color(2, y, "group:", color);
-        if (adv_editing && selected)
-        {
-            print_at_color(10, y, adv_group, 5);
-            print_at_color(10 + strlen(adv_group), y, "_", 5);
-        }
-        else if (adv_group[0])
-            print_at_color(10, y, adv_group, color);
-        else
-            print_at_color(10, y, "(any)", 11);
-        break;
-
-    case ADV_FIELD_TYPE:
-        print_at_color(2, y, "type:", color);
-        print_at_color(10, y, "[", color);
-        print_at_color(11, y, adv_type_names[adv_type], 5);
-        print_at_color(11 + strlen(adv_type_names[adv_type]), y, "]", color);
-        break;
-
-    case ADV_FIELD_SEARCH:
-        print_at_color(2, y, "[search]", color);
-        break;
-    }
-}
-
-// Update advanced search cursor (only redraws 2 lines)
-void update_adv_cursor(int old_field, int new_field)
-{
-    if (old_field >= 0 && old_field < ADV_FIELD_COUNT)
-        draw_adv_field(old_field, false);
-    if (new_field >= 0 && new_field < ADV_FIELD_COUNT)
-        draw_adv_field(new_field, true);
-}
-
-void draw_adv_search(void)
-{
-    clear_screen();
-    print_at_color(0, 0, "advanced search", 7);  // Yellow
-
-    // Draw all fields
-    for (int i = 0; i < ADV_FIELD_COUNT; i++)
-        draw_adv_field(i, i == adv_cursor);
-
-    // Help line
-    if (adv_editing)
-        print_at(0, 23, "type text  enter:done  del:erase");
-    else
-        print_at(0, 23, "w/s:move space:toggle enter:search del:back");
-}
-
-void draw_adv_results(void)
-{
-    clear_screen();
-
-    // Title with count on same line
-    char title[40];
-    sprintf(title, "results %d-%d of %ld", offset + 1, offset + item_count, total_count);
-    print_at_color(0, 0, title, 7);  // Yellow
-
-    // Draw items starting at row 2 - limit to 19 items (rows 2-20)
-    // Row 21-22 empty, row 23 for help
-    int max_display = 19;
-    for (int i = 0; i < item_count && i < max_display; i++)
-    {
-        draw_adv_item_at(i, i == cursor);
-    }
-
-    // Help line at row 23
-    print_at(0, 23, "w/s:move enter:run >:releases i:info del:bk");
 }
 
 // Draw item for releases list with trainer count
@@ -1734,23 +1438,28 @@ int main(void)
                 }
                 break;
 
-            case '/':  // Start advanced search
+            case '/':  // Open simple search (typed query against server SEARCH)
                 if (current_page == PAGE_CATS)
                 {
-                    current_page = PAGE_ADV_SEARCH;
-                    adv_cursor = 0;
-                    adv_editing = false;
-                    // Reset form fields
-                    adv_category = 0;
-                    adv_source = 0;
-                    adv_title[0] = 0;
-                    adv_group[0] = 0;
-                    adv_type = 0;
+                    current_page = PAGE_SEARCH;
+                    search_query[0] = 0;
+                    search_query_len = 0;
+                    search_category = 0;
                     item_count = 0;
                     total_count = 0;
                     cursor = 0;
                     offset = 0;
-                    draw_adv_search();
+                    draw_list("assembly64 - search");
+                }
+                break;
+
+            case '\t':  // Cycle category filter while in search
+                if (current_page == PAGE_SEARCH)
+                {
+                    search_category = (search_category + 1) & 3;  // 0..3
+                    if (search_query_len >= 2)
+                        do_search(search_query, 0);
+                    draw_list("assembly64 - search");
                 }
                 break;
 
@@ -1763,33 +1472,22 @@ int main(void)
                         draw_settings();
                     }
                 }
-                else if (current_page == PAGE_ADV_SEARCH)
-                {
-                    if (adv_cursor > 0)
-                    {
-                        int old = adv_cursor;
-                        adv_cursor--;
-                        update_adv_cursor(old, adv_cursor);
-                    }
-                }
-                else if (current_page == PAGE_ADV_RESULTS)
+                else if (current_page == PAGE_SEARCH)
                 {
                     if (cursor > 0)
                     {
                         int old = cursor;
                         cursor--;
-                        update_adv_cursor_results(old, cursor);
+                        update_cursor(old, cursor);
                     }
                     else if (offset > 0)
                     {
-                        // At top of list, go to previous page
                         int new_offset = offset - 20;
                         if (new_offset < 0) new_offset = 0;
-                        do_adv_search(new_offset);
-                        // Go to bottom of new page, but max visible is 18
+                        do_search(search_query, new_offset);
                         cursor = item_count - 1;
-                        if (cursor > 18) cursor = 18;
-                        draw_adv_results();
+                        if (cursor > LIST_HEIGHT - 1) cursor = LIST_HEIGHT - 1;
+                        draw_list("assembly64 - search");
                     }
                 }
                 else if (current_page == PAGE_RELEASES)
@@ -1856,31 +1554,20 @@ int main(void)
                         draw_settings();
                     }
                 }
-                else if (current_page == PAGE_ADV_SEARCH)
+                else if (current_page == PAGE_SEARCH)
                 {
-                    if (adv_cursor < ADV_FIELD_COUNT - 1)
-                    {
-                        int old = adv_cursor;
-                        adv_cursor++;
-                        update_adv_cursor(old, adv_cursor);
-                    }
-                }
-                else if (current_page == PAGE_ADV_RESULTS)
-                {
-                    // Max 19 visible items (0-18)
-                    int max_visible = 18;
+                    int max_visible = LIST_HEIGHT - 1;
                     if (cursor < item_count - 1 && cursor < max_visible)
                     {
                         int old = cursor;
                         cursor++;
-                        update_adv_cursor_results(old, cursor);
+                        update_cursor(old, cursor);
                     }
                     else if (offset + item_count < total_count)
                     {
-                        // At bottom of visible list or at end, go to next page
-                        do_adv_search(offset + 20);
-                        cursor = 0;  // Go to top of new page
-                        draw_adv_results();
+                        do_search(search_query, offset + 20);
+                        cursor = 0;
+                        draw_list("assembly64 - search");
                     }
                 }
                 else if (current_page == PAGE_RELEASES)
@@ -1962,28 +1649,6 @@ int main(void)
                 }
                 break;
 
-            case ' ':  // Space - toggle/cycle in advanced search
-                if (current_page == PAGE_ADV_SEARCH && !adv_editing)
-                {
-                    if (adv_cursor == ADV_FIELD_CAT)
-                    {
-                        adv_category = (adv_category + 1) % 4;
-                        adv_source = 0;  // Reset source when category changes
-                        draw_adv_search();
-                    }
-                    else if (adv_cursor == ADV_FIELD_SOURCE)
-                    {
-                        adv_source = (adv_source + 1) % get_source_count();
-                        draw_adv_search();
-                    }
-                    else if (adv_cursor == ADV_FIELD_TYPE)
-                    {
-                        adv_type = (adv_type + 1) % 10;
-                        draw_adv_search();
-                    }
-                }
-                break;
-
             case '>':  // Right arrow - enter menu item or releases
                 if (current_page == PAGE_CATS && item_count > 0)
                 {
@@ -2018,28 +1683,6 @@ int main(void)
                         strncpy(releases_category, current_category, 47);
                         releases_category[47] = 0;
                         releases_return_page = PAGE_LIST;
-                        releases_return_offset = offset;
-                        releases_return_cursor = cursor;
-                        do_releases(releases_category, releases_title, 0);
-                        current_page = PAGE_RELEASES;
-                        draw_releases();
-                    }
-                    else
-                    {
-                        // Single release - just run it
-                        run_entry(item_ids[cursor]);
-                    }
-                }
-                else if (current_page == PAGE_ADV_RESULTS && item_count > 0)
-                {
-                    // Enter releases sub-list if count > 1
-                    if (item_counts[cursor] > 1)
-                    {
-                        strncpy(releases_title, item_names[cursor], 31);
-                        releases_title[31] = 0;
-                        strncpy(releases_category, item_cats[cursor], 7);
-                        releases_category[7] = 0;
-                        releases_return_page = PAGE_ADV_RESULTS;
                         releases_return_offset = offset;
                         releases_return_cursor = cursor;
                         do_releases(releases_category, releases_title, 0);
@@ -2100,58 +1743,6 @@ int main(void)
                         draw_list("assembly64 - categories");
                     }
                 }
-                else if (current_page == PAGE_ADV_SEARCH)
-                {
-                    if (adv_editing)
-                    {
-                        // Exit edit mode
-                        adv_editing = false;
-                        draw_adv_search();
-                    }
-                    else if (adv_cursor == ADV_FIELD_TITLE)
-                    {
-                        // Start editing title
-                        adv_editing = true;
-                        adv_edit_pos = strlen(adv_title);
-                        draw_adv_search();
-                    }
-                    else if (adv_cursor == ADV_FIELD_GROUP)
-                    {
-                        // Start editing group
-                        adv_editing = true;
-                        adv_edit_pos = strlen(adv_group);
-                        draw_adv_search();
-                    }
-                    else if (adv_cursor == ADV_FIELD_SEARCH)
-                    {
-                        // Execute search and go to results page
-                        do_adv_search(0);
-                        if (item_count > 0)
-                        {
-                            current_page = PAGE_ADV_RESULTS;
-                            draw_adv_results();
-                        }
-                        else
-                        {
-                            print_status("no results found");
-                        }
-                    }
-                }
-                else if (current_page == PAGE_ADV_RESULTS && item_count > 0)
-                {
-                    // If grouped entry with multiple releases, enter releases
-                    if (item_counts[cursor] > 1)
-                    {
-                        do_releases(item_cats[cursor], item_names[cursor], 0);
-                        current_page = PAGE_RELEASES;
-                        draw_releases();
-                    }
-                    else
-                    {
-                        // Single release - run it
-                        run_entry(item_ids[cursor]);
-                    }
-                }
                 else if (current_page == PAGE_RELEASES && item_count > 0)
                 {
                     // Run selected release
@@ -2186,34 +1777,25 @@ int main(void)
                     // Go back
                     go_back();
                 }
-                else if (current_page == PAGE_ADV_SEARCH)
+                else if (current_page == PAGE_SEARCH)
                 {
-                    if (adv_editing)
+                    if (search_query_len > 0)
                     {
-                        // Delete character from current field
-                        if (adv_cursor == ADV_FIELD_TITLE && strlen(adv_title) > 0)
-                        {
-                            adv_title[strlen(adv_title) - 1] = 0;
-                            draw_adv_search();
+                        search_query_len--;
+                        search_query[search_query_len] = 0;
+                        if (search_query_len >= 2)
+                            do_search(search_query, 0);
+                        else {
+                            item_count = 0;
+                            total_count = 0;
                         }
-                        else if (adv_cursor == ADV_FIELD_GROUP && strlen(adv_group) > 0)
-                        {
-                            adv_group[strlen(adv_group) - 1] = 0;
-                            draw_adv_search();
-                        }
+                        draw_list("assembly64 - search");
                     }
                     else
                     {
-                        // Go back to categories
                         load_categories();
                         draw_list("assembly64 - categories");
                     }
-                }
-                else if (current_page == PAGE_ADV_RESULTS)
-                {
-                    // Go back to advanced search form
-                    current_page = PAGE_ADV_SEARCH;
-                    draw_adv_search();
                 }
                 else if (current_page == PAGE_RELEASES)
                 {
@@ -2228,10 +1810,10 @@ int main(void)
                     load_list_path(current_category, offset + 20);
                     draw_list(current_category);
                 }
-                else if (current_page == PAGE_ADV_RESULTS && offset + item_count < total_count)
+                else if (current_page == PAGE_SEARCH && offset + item_count < total_count)
                 {
-                    do_adv_search(offset + 20);
-                    draw_adv_results();
+                    do_search(search_query, offset + 20);
+                    draw_list("assembly64 - search");
                 }
                 else if (current_page == PAGE_RELEASES && offset + item_count < total_count)
                 {
@@ -2248,12 +1830,12 @@ int main(void)
                     load_list_path(current_category, new_offset);
                     draw_list(current_category);
                 }
-                else if (current_page == PAGE_ADV_RESULTS && offset > 0)
+                else if (current_page == PAGE_SEARCH && offset > 0)
                 {
                     int new_offset = offset - 20;
                     if (new_offset < 0) new_offset = 0;
-                    do_adv_search(new_offset);
-                    draw_adv_results();
+                    do_search(search_query, new_offset);
+                    draw_list("assembly64 - search");
                 }
                 else if (current_page == PAGE_RELEASES && offset > 0)
                 {
@@ -2265,8 +1847,8 @@ int main(void)
                 break;
 
             case 'i':  // Info
-                if ((current_page == PAGE_LIST ||
-                     current_page == PAGE_ADV_RESULTS || current_page == PAGE_RELEASES) && item_count > 0)
+                if ((current_page == PAGE_LIST || current_page == PAGE_SEARCH ||
+                     current_page == PAGE_RELEASES) && item_count > 0)
                 {
                     // Remember where to return
                     info_return_page = current_page;
@@ -2285,16 +1867,29 @@ int main(void)
                     current_page = info_return_page;
                     if (current_page == PAGE_LIST)
                         draw_list(current_category);
-                    else if (current_page == PAGE_ADV_RESULTS)
-                        draw_adv_results();
+                    else if (current_page == PAGE_SEARCH)
+                        draw_list("assembly64 - search");
                     else if (current_page == PAGE_RELEASES)
                         draw_releases();
                 }
                 break;
 
             default:
+                // Typed alphanumeric in search mode → grow query, re-search
+                if (current_page == PAGE_SEARCH &&
+                    ((key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9')))
+                {
+                    if (search_query_len < (int)sizeof(search_query) - 1)
+                    {
+                        search_query[search_query_len++] = key;
+                        search_query[search_query_len] = 0;
+                        if (search_query_len >= 2)
+                            do_search(search_query, 0);
+                        draw_list("assembly64 - search");
+                    }
+                }
                 // Typed character in settings edit mode
-                if (current_page == PAGE_SETTINGS && settings_editing &&
+                else if (current_page == PAGE_SETTINGS && settings_editing &&
                          ((key >= '0' && key <= '9') || key == '.'))
                 {
                     if (settings_edit_pos < 30)
@@ -2302,25 +1897,6 @@ int main(void)
                         server_host[settings_edit_pos++] = key;
                         server_host[settings_edit_pos] = 0;
                         draw_settings();
-                    }
-                }
-                // Typed character in advanced search edit mode
-                else if (current_page == PAGE_ADV_SEARCH && adv_editing &&
-                         ((key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9') || key == '_'))
-                {
-                    if (adv_cursor == ADV_FIELD_TITLE && strlen(adv_title) < 22)
-                    {
-                        int len = strlen(adv_title);
-                        adv_title[len] = key;
-                        adv_title[len + 1] = 0;
-                        draw_adv_search();
-                    }
-                    else if (adv_cursor == ADV_FIELD_GROUP && strlen(adv_group) < 22)
-                    {
-                        int len = strlen(adv_group);
-                        adv_group[len] = key;
-                        adv_group[len + 1] = 0;
-                        draw_adv_search();
                     }
                 }
                 break;

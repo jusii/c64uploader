@@ -928,12 +928,23 @@ char get_key(void)
                 }
             }
         }
-        // In simple search (typed query + result list)
+        // In simple search. The active region (input box vs result list)
+        // determines whether letter scancodes are typing-input or nav
+        // shortcuts. Cursor-keys are always nav (no character ambiguity);
+        // letters W/S/N/P/I are nav ONLY in the result list, otherwise
+        // they're appended to the query.
         else if (current_page == PAGE_SEARCH)
         {
             if (k == KSCAN_CSR_RIGHT && shift) return 8;  // Left = back
             if (k == 0x0F) return '\t';  // C= = cycle category
-            if (item_count > 0) {
+            if (search_in_box)
+            {
+                // Cursor-up/down only — leave letters for typing.
+                if (k == KSCAN_CSR_DOWN && shift) return 'u';
+                if (k == KSCAN_CSR_DOWN) return 'd';
+            }
+            else if (item_count > 0)
+            {
                 if (k == KSCAN_W || (k == KSCAN_CSR_DOWN && shift)) return 'u';
                 if (k == KSCAN_S || k == KSCAN_CSR_DOWN) return 'd';
                 if (k == KSCAN_N) return 'n';
@@ -941,6 +952,7 @@ char get_key(void)
                 if (k == KSCAN_I) return 'i';
                 if (k == KSCAN_CSR_RIGHT && !shift) return '\r';
             }
+            // Letter / digit fallthrough: typed character.
             if (k < 64) {
                 byte c = (byte)keyb_codes[shift ? k + 64 : k];
                 if (c >= 'a' && c <= 'z') return c - 32;

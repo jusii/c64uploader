@@ -83,7 +83,8 @@ static byte search_category = 0;
 // row immediately for visual feedback but defers the server SEARCH command
 // until JIFFY_LOW reaches search_due_jiffy. Each new keystroke pushes the
 // deadline forward, so a quick burst of typing/deleting only fires one query.
-#define SEARCH_DEBOUNCE_JIFFIES 12  // ~240ms of quiet before the query fires
+#define SEARCH_DEBOUNCE_JIFFIES 100  // ~2s of quiet before the query fires
+#define SEARCH_MIN_QUERY_LEN     3  // server SEARCH only fires once query is this long
 static bool search_pending = false;
 static byte search_due_jiffy = 0;
 
@@ -1451,7 +1452,7 @@ int main(void)
             if ((byte)(now - search_due_jiffy) < 128)
             {
                 search_pending = false;
-                if (search_query_len >= 2)
+                if (search_query_len >= SEARCH_MIN_QUERY_LEN)
                     do_search(search_query, 0);
                 else {
                     item_count = 0;
@@ -1509,7 +1510,7 @@ int main(void)
                 {
                     search_category = (search_category + 1) & 3;  // 0..3
                     draw_search_input();
-                    if (search_query_len >= 2)
+                    if (search_query_len >= SEARCH_MIN_QUERY_LEN)
                         mark_search_pending();
                 }
                 break;
@@ -1837,7 +1838,7 @@ int main(void)
                         draw_search_input();
                         // Defer the actual SEARCH; quick repeated DELs (auto-
                         // repeat held) don't queue server round-trips.
-                        if (search_query_len >= 2)
+                        if (search_query_len >= SEARCH_MIN_QUERY_LEN)
                             mark_search_pending();
                         else {
                             search_pending = false;
@@ -1940,7 +1941,7 @@ int main(void)
                         search_query[search_query_len++] = key;
                         search_query[search_query_len] = 0;
                         draw_search_input();
-                        if (search_query_len >= 2)
+                        if (search_query_len >= SEARCH_MIN_QUERY_LEN)
                             mark_search_pending();
                     }
                 }

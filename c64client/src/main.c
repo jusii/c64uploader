@@ -351,12 +351,19 @@ int parse_ok_count(void)
 // Sets menu_path, item_names, menu_paths, menu_types, item_count
 void load_menu(const char *path)
 {
+    // Callers typically pass menu_paths[cursor] as `path`, and the parser
+    // loop below overwrites menu_paths[] with the new server response. Snapshot
+    // into a local buffer so the final strncpy into menu_path survives.
+    char saved_path[64];
+    strncpy(saved_path, path, 63);
+    saved_path[63] = 0;
+
     print_status("loading...");
 
     // Build MENU command
     char cmd[80];
-    if (path[0])
-        sprintf(cmd, "MENU %s", path);
+    if (saved_path[0])
+        sprintf(cmd, "MENU %s", saved_path);
     else
         strcpy(cmd, "MENU");
 
@@ -405,8 +412,8 @@ void load_menu(const char *path)
         item_count++;
     }
 
-    // Save current path
-    strncpy(menu_path, path, 63);
+    // Save current path (from our snapshot, since menu_paths[] was rewritten)
+    strncpy(menu_path, saved_path, 63);
     menu_path[63] = 0;
 
     cursor = 0;
@@ -1334,7 +1341,7 @@ void draw_list(const char *title)
     if (item_count > 0)
     {
         char info[40];
-        sprintf(info, "%d-%d of %d", offset + 1, offset + item_count, total_count);
+        sprintf(info, "%d-%d of %ld", offset + 1, offset + item_count, total_count);
         print_at(0, 2, info);
     }
     // Draw items
@@ -1515,7 +1522,7 @@ void draw_adv_results(void)
 
     // Title with count on same line
     char title[40];
-    sprintf(title, "results %d-%d of %d", offset + 1, offset + item_count, total_count);
+    sprintf(title, "results %d-%d of %ld", offset + 1, offset + item_count, total_count);
     print_at_color(0, 0, title, 7);  // Yellow
 
     // Draw items starting at row 2 - limit to 19 items (rows 2-20)
@@ -1567,7 +1574,7 @@ void draw_releases(void)
 
     // Title: "Title (count)"
     char title[48];
-    sprintf(title, "%s (%d)", releases_title, total_count);
+    sprintf(title, "%s (%ld)", releases_title, total_count);
     print_at_color(0, 0, title, 7);  // Yellow
 
     // Draw items starting at row 2

@@ -817,29 +817,25 @@ func getGamesMenu(index *SearchIndex, parts []string) []menuEntry {
 
 	source := parts[1]
 	if len(parts) == 2 {
-		// Games/Source/ - show sub-categories
-		switch source {
-		case "CSDB":
-			return []menuEntry{
-				{Name: "Top 200", Type: "list", Path: "Games/CSDB/Top200", Count: countByPathPrefix(index, "Games/CSDB/Top200")},
-				{Name: "4K Competition", Type: "list", Path: "Games/CSDB/4k", Count: countByPathPrefix(index, "Games/CSDB/4k")},
-				{Name: "All (A-Z)", Type: "folder", Path: "Games/CSDB/All"},
-			}
-		default:
-			// Other sources: go directly to A-Z letter folders
-			// Don't use "All" in path - return letters with source as base
-			return getLetterFoldersWithBase(index, "Games/"+source+"/All", "Games/"+source)
+		// Games/Source/ - show special lists + A-Z letters on same level
+		var entries []menuEntry
+
+		// Add special lists for CSDB
+		if source == "CSDB" {
+			entries = append(entries,
+				menuEntry{Name: "Top 200", Type: "list", Path: "Games/CSDB/Top200", Count: countByPathPrefix(index, "Games/CSDB/Top200")},
+				menuEntry{Name: "4K Competition", Type: "list", Path: "Games/CSDB/4k", Count: countByPathPrefix(index, "Games/CSDB/4k")},
+			)
 		}
+
+		// Add A-Z letter folders
+		letters := getLetterFolders(index, "Games/"+source+"/All")
+		entries = append(entries, letters...)
+		return entries
 	}
 
-	// Games/CSDB/All/ or similar - show letter folders
-	if len(parts) == 3 && parts[2] == "All" {
-		return getLetterFolders(index, joinPath(parts))
-	}
-
-	// Games/CSDB/All/A - this is a terminal list path, return empty menu
-	// Client should use LISTPATH directly for these paths
-	if len(parts) == 4 {
+	// Games/CSDB/A - this is a terminal list path (letter selected)
+	if len(parts) == 3 {
 		return nil
 	}
 
@@ -859,23 +855,27 @@ func getDemosMenu(index *SearchIndex, parts []string) []menuEntry {
 
 	source := parts[1]
 	if len(parts) == 2 {
-		switch source {
-		case "CSDB":
-			return []menuEntry{
-				{Name: "Top 200", Type: "list", Path: "Demos/CSDB/Top200", Count: countByPathPrefix(index, "Demos/CSDB/Top200")},
-				{Name: "Top 500", Type: "list", Path: "Demos/CSDB/Top500", Count: countByPathPrefix(index, "Demos/CSDB/Top500")},
-				{Name: "By Year", Type: "folder", Path: "Demos/CSDB/Year"},
-				{Name: "Year Top 20", Type: "folder", Path: "Demos/CSDB/Year-top20"},
-				{Name: "Onefile", Type: "folder", Path: "Demos/CSDB/Onefile"},
-				{Name: "All (A-Z)", Type: "folder", Path: "Demos/CSDB/All"},
-			}
-		default:
-			// Other sources: go directly to A-Z letter folders
-			return getLetterFoldersWithBase(index, "Demos/"+source+"/All", "Demos/"+source)
+		// Demos/Source/ - show special lists + A-Z letters on same level
+		var entries []menuEntry
+
+		// Add special lists for CSDB
+		if source == "CSDB" {
+			entries = append(entries,
+				menuEntry{Name: "Top 200", Type: "list", Path: "Demos/CSDB/Top200", Count: countByPathPrefix(index, "Demos/CSDB/Top200")},
+				menuEntry{Name: "Top 500", Type: "list", Path: "Demos/CSDB/Top500", Count: countByPathPrefix(index, "Demos/CSDB/Top500")},
+				menuEntry{Name: "By Year", Type: "folder", Path: "Demos/CSDB/Year"},
+				menuEntry{Name: "Year Top 20", Type: "folder", Path: "Demos/CSDB/Year-top20"},
+				menuEntry{Name: "Onefile", Type: "folder", Path: "Demos/CSDB/Onefile"},
+			)
 		}
+
+		// Add A-Z letter folders
+		letters := getLetterFolders(index, "Demos/"+source+"/All")
+		entries = append(entries, letters...)
+		return entries
 	}
 
-	// Handle sub-folders
+	// Handle sub-folders (Year, Onefile)
 	if len(parts) >= 3 {
 		subPath := parts[2]
 		p := joinPath(parts)
@@ -884,7 +884,7 @@ func getDemosMenu(index *SearchIndex, parts []string) []menuEntry {
 			if len(parts) == 3 {
 				return getYearFolders(index, p)
 			}
-			// Year selected - terminal list path, return empty menu
+			// Year selected - terminal list path
 			return nil
 		case "Onefile":
 			if len(parts) == 3 {
@@ -892,11 +892,8 @@ func getDemosMenu(index *SearchIndex, parts []string) []menuEntry {
 			}
 			// Terminal list path
 			return nil
-		case "All":
-			if len(parts) == 3 {
-				return getLetterFolders(index, p)
-			}
-			// Terminal list path
+		default:
+			// Letter selected (A, B, C, etc.) - terminal list path
 			return nil
 		}
 	}
@@ -917,24 +914,24 @@ func getMusicMenu(index *SearchIndex, parts []string) []menuEntry {
 
 	source := parts[1]
 	if len(parts) == 2 {
-		switch source {
-		case "CSDB":
-			return []menuEntry{
-				{Name: "Top 200", Type: "list", Path: "Music/CSDB/Top200", Count: countByPathPrefix(index, "Music/CSDB/Top200")},
-				{Name: "All (A-Z)", Type: "folder", Path: "Music/CSDB/All"},
-			}
-		default:
-			// Other sources: go directly to A-Z letter folders
-			return getLetterFoldersWithBase(index, "Music/"+source+"/All", "Music/"+source)
+		// Music/Source/ - show special lists + A-Z letters on same level
+		var entries []menuEntry
+
+		// Add special lists for CSDB
+		if source == "CSDB" {
+			entries = append(entries,
+				menuEntry{Name: "Top 200", Type: "list", Path: "Music/CSDB/Top200", Count: countByPathPrefix(index, "Music/CSDB/Top200")},
+			)
 		}
+
+		// Add A-Z letter folders
+		letters := getLetterFolders(index, "Music/"+source+"/All")
+		entries = append(entries, letters...)
+		return entries
 	}
 
-	if len(parts) >= 3 && parts[2] == "All" {
-		p := joinPath(parts)
-		if len(parts) == 3 {
-			return getLetterFolders(index, p)
-		}
-		// Terminal list path
+	// Music/Source/A - terminal list path (letter selected)
+	if len(parts) == 3 {
 		return nil
 	}
 
@@ -952,16 +949,12 @@ func getIntrosMenu(index *SearchIndex, parts []string) []menuEntry {
 
 	source := parts[1]
 	if len(parts) == 2 {
-		// Go directly to A-Z letter folders
-		return getLetterFoldersWithBase(index, "Intros/"+source+"/All", "Intros/"+source)
+		// Intros/Source/ - show A-Z letters directly
+		return getLetterFolders(index, "Intros/"+source+"/All")
 	}
 
-	if len(parts) >= 3 && parts[2] == "All" {
-		p := joinPath(parts)
-		if len(parts) == 3 {
-			return getLetterFolders(index, p)
-		}
-		// Terminal list path
+	// Intros/Source/A - terminal list path (letter selected)
+	if len(parts) == 3 {
 		return nil
 	}
 
@@ -971,21 +964,12 @@ func getIntrosMenu(index *SearchIndex, parts []string) []menuEntry {
 // getGraphicsMenu returns menu entries for Graphics category.
 func getGraphicsMenu(index *SearchIndex, parts []string) []menuEntry {
 	if len(parts) == 1 {
-		// Only one source, go directly to A-Z letter folders
-		return getLetterFoldersWithBase(index, "Graphics/CSDB/All", "Graphics")
+		// Graphics/ - show A-Z letters directly (only one source: CSDB)
+		return getLetterFolders(index, "Graphics/CSDB/All")
 	}
 
-	// Handle direct navigation to Graphics/CSDB
+	// Graphics/A - terminal list path (letter selected)
 	if len(parts) == 2 {
-		return getLetterFoldersWithBase(index, "Graphics/"+parts[1]+"/All", "Graphics/"+parts[1])
-	}
-
-	if len(parts) >= 3 && parts[2] == "All" {
-		p := joinPath(parts)
-		if len(parts) == 3 {
-			return getLetterFolders(index, p)
-		}
-		// Terminal list path
 		return nil
 	}
 
@@ -995,21 +979,12 @@ func getGraphicsMenu(index *SearchIndex, parts []string) []menuEntry {
 // getDiscmagsMenu returns menu entries for Discmags category.
 func getDiscmagsMenu(index *SearchIndex, parts []string) []menuEntry {
 	if len(parts) == 1 {
-		// Only one source, go directly to A-Z letter folders
-		return getLetterFoldersWithBase(index, "Discmags/CSDB/All", "Discmags")
+		// Discmags/ - show A-Z letters directly (only one source: CSDB)
+		return getLetterFolders(index, "Discmags/CSDB/All")
 	}
 
-	// Handle direct navigation to Discmags/CSDB
+	// Discmags/A - terminal list path (letter selected)
 	if len(parts) == 2 {
-		return getLetterFoldersWithBase(index, "Discmags/"+parts[1]+"/All", "Discmags/"+parts[1])
-	}
-
-	if len(parts) >= 3 && parts[2] == "All" {
-		p := joinPath(parts)
-		if len(parts) == 3 {
-			return getLetterFolders(index, p)
-		}
-		// Terminal list path
 		return nil
 	}
 
@@ -1255,6 +1230,20 @@ func handleReleases(index *SearchIndex, pathOrCategory, title string, offset, co
 	// Determine if it's a path (contains /) or a simple category
 	isPath := strings.Contains(pathOrCategory, "/")
 	pathLower := strings.ToLower(pathOrCategory)
+
+	// Check if last component is a letter filter (single char A-Z or #) and strip it
+	// This handles paths like "Games/CSDB/All/B" where B is the letter filter
+	if isPath {
+		parts := strings.Split(pathOrCategory, "/")
+		if len(parts) > 0 {
+			last := parts[len(parts)-1]
+			if len(last) == 1 && ((last >= "A" && last <= "Z") || (last >= "a" && last <= "z") || last == "#") {
+				// Strip the letter filter from the path
+				basePath := strings.Join(parts[:len(parts)-1], "/")
+				pathLower = strings.ToLower(basePath)
+			}
+		}
+	}
 
 	// Handle "All" virtual folder - strip it from the path for matching
 	if strings.Contains(pathLower, "/all") {

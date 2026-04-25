@@ -1897,7 +1897,7 @@ int main(void)
                         load_list_path(current_category, new_offset);
                         cursor = item_count - 1;
                         if (cursor > LIST_HEIGHT - 1) cursor = LIST_HEIGHT - 1;
-                        draw_list(menu_path);
+                        draw_list(current_category);
                     }
                 }
                 else if (current_page == PAGE_SEARCH)
@@ -1994,7 +1994,7 @@ int main(void)
                         // At bottom, go to next page
                         load_list_path(current_category, offset + 20);
                         cursor = 0;
-                        draw_list(menu_path);
+                        draw_list(current_category);
                     }
                 }
                 else if (current_page == PAGE_SEARCH)
@@ -2309,7 +2309,7 @@ int main(void)
                 if (current_page == PAGE_LIST && offset + item_count < total_count)
                 {
                     load_list_path(current_category, offset + 20);
-                    draw_list(menu_path);
+                    draw_list(current_category);
                 }
                 else if (current_page == PAGE_SEARCH && offset + item_count < total_count)
                 {
@@ -2334,7 +2334,7 @@ int main(void)
                     int new_offset = offset - 20;
                     if (new_offset < 0) new_offset = 0;
                     load_list_path(current_category, new_offset);
-                    draw_list(menu_path);
+                    draw_list(current_category);
                 }
                 else if (current_page == PAGE_SEARCH && offset > 0)
                 {

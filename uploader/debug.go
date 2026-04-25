@@ -103,11 +103,12 @@ func parseKey(tok string) (byte, error) {
 		return code, nil
 	}
 	if len(tok) == 1 {
-		c := tok[0]
-		if c >= 'a' && c <= 'z' {
-			c -= 32
-		}
-		return c, nil
+		// Pass single chars through verbatim. get_key() dispatches on
+		// lowercase for nav keys ('i' info, 'n'/'p' paging, 'q' quit, 'c'
+		// config) and the search default-handler consumes uppercase directly.
+		// If the caller wants uppercase for search-mode typing they should
+		// spell it uppercase.
+		return tok[0], nil
 	}
 	return 0, fmt.Errorf("unknown key %q (known: up down next prev info enter back right tab space q c slash, or a single char)", tok)
 }

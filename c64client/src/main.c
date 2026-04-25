@@ -44,8 +44,9 @@ static bool connected = false;
 //   "" -> "Games" -> "Games/CSDB" -> entries
 // Going back = trim last path component
 
-// Menu/list state
-#define MAX_ITEMS 20
+// Menu/list state. 27 must fit (A-Z + '#' letter grid); server still pages
+// regular lists at 20 entries per page, so headroom here is cheap.
+#define MAX_ITEMS 32
 static char item_names[MAX_ITEMS][32];
 static long item_ids[MAX_ITEMS];
 static int  item_count = 0;
@@ -70,6 +71,8 @@ void draw_list(const char *title);
 void draw_releases(void);
 void do_releases(const char *category, const char *title, int start);
 void run_myfile(const char *path);
+static bool is_letter_grid(void);
+void update_letter_grid_cursor(int old_cursor, int new_cursor);
 
 // Search category filter: 0=All, 1=Games, 2=Demos, 3=Music
 static int  search_category = 0;
@@ -155,6 +158,10 @@ static char releases_category[48];     // Path or category of releases
 static int  releases_return_page = PAGE_ADV_RESULTS;  // Where to return (PAGE_LIST or PAGE_ADV_RESULTS)
 static int  releases_return_offset = 0;  // Offset to restore when returning
 static int  releases_return_cursor = 0;  // Cursor position within page to restore
+
+// When entering a LIST from a menu (including the A-Z letter grid), remember
+// where the cursor was so go_back can put it back rather than snap to item 0.
+static int  menu_return_cursor = 0;
 
 // VIC chip at $D000
 #define vic (*(struct VIC *)0xd000)
@@ -451,23 +458,16 @@ void go_back(void)
     }
     else if (current_page == PAGE_LIST)
     {
-        // Entry list -> back to parent menu
-        // current_category holds the list path (e.g. "Games/CSDB")
-        // The parent menu path is the same (Browse A-Z is inside Games/CSDB menu)
-        // But we need to check: does MENU for this path return items?
-        // If so, show that menu. If not, trim further.
-        load_menu(current_category);
-        if (item_count > 0)
-        {
-            draw_list(menu_path[0] ? menu_path : "assembly64 - categories");
-        }
-        else
-        {
-            // Shouldn't happen normally, but fall back to parent
-            trim_path(menu_path);
-            load_menu(menu_path);
-            draw_list(menu_path[0] ? menu_path : "assembly64 - categories");
-        }
+        // Entry list -> back to parent menu. menu_path was set by the last
+        // successful load_menu (the parent we came from), so just reload it.
+        // Works whether the list lives directly under that menu (old Browse
+        // A-Z) or one level deeper (new A-Z/letter layout), and avoids the
+        // invalid "MENU Category/Source/A-Z/K" call that would stall the
+        // client because the server has no menu at that leaf path.
+        load_menu(menu_path);
+        if (menu_return_cursor < item_count)
+            cursor = menu_return_cursor;
+        draw_list(menu_path[0] ? menu_path : "assembly64 - categories");
     }
     else if (current_page == PAGE_CATS)
     {
@@ -1053,14 +1053,28 @@ char get_key(void)
         // In category menu
         if (current_page == PAGE_CATS)
         {
-            if (k == KSCAN_Q) return 'q';
-            if (k == KSCAN_C) return 'c';  // Settings
-            if (k == KSCAN_W) return 'u';
-            if (k == KSCAN_CSR_DOWN && shift) return 'u';
-            if (k == KSCAN_S || k == KSCAN_CSR_DOWN) return 'd';
-            if (k == KSCAN_SLASH) return '/';
-            if (k == KSCAN_CSR_RIGHT && !shift) return '>';  // Right = enter category
-            if (k == KSCAN_CSR_RIGHT && shift) return 8;  // Left = back
+            if (is_letter_grid())
+            {
+                // Grid mode: cursor right/left navigate the grid instead of
+                // entering a folder / going back. Back still works via DEL.
+                if (k == KSCAN_W || (k == KSCAN_CSR_DOWN && shift)) return 'u';
+                if (k == KSCAN_S || k == KSCAN_CSR_DOWN) return 'd';
+                if (k == KSCAN_CSR_RIGHT && !shift) return 'r';
+                if (k == KSCAN_CSR_RIGHT && shift) return 'l';
+                if (k == KSCAN_A) return 'l';
+                if (k == KSCAN_D) return 'r';
+            }
+            else
+            {
+                if (k == KSCAN_Q) return 'q';
+                if (k == KSCAN_C) return 'c';  // Settings
+                if (k == KSCAN_W) return 'u';
+                if (k == KSCAN_CSR_DOWN && shift) return 'u';
+                if (k == KSCAN_S || k == KSCAN_CSR_DOWN) return 'd';
+                if (k == KSCAN_SLASH) return '/';
+                if (k == KSCAN_CSR_RIGHT && !shift) return '>';  // Right = enter category
+                if (k == KSCAN_CSR_RIGHT && shift) return 8;  // Left = back
+            }
         }
         // In list view
         else if (current_page == PAGE_LIST)
@@ -1321,8 +1335,63 @@ void update_adv_cursor_results(int old_cursor, int new_cursor)
         draw_adv_item_at(new_cursor, true);
 }
 
+// Letter-grid layout: 3 rows x 9 cols (A..Z + '#' = 27 cells). Each cell is
+// 4 chars wide starting at column 2. Cells are repainted individually on
+// cursor move via draw_letter_cell to avoid full screen redraws.
+#define LETTER_GRID_COLS 9
+#define LETTER_GRID_X0   2
+#define LETTER_GRID_Y0   3
+#define LETTER_GRID_STEP_X 4
+#define LETTER_GRID_STEP_Y 2
+
+// True when the current menu should be rendered as a letter grid rather than
+// a vertical list. The server marks this by making the menu_path end with
+// "/A-Z".
+static bool is_letter_grid(void)
+{
+    int len = strlen(menu_path);
+    return len >= 4 && strcmp(menu_path + len - 4, "/A-Z") == 0;
+}
+
+static void draw_letter_cell(int idx, bool selected)
+{
+    byte x = LETTER_GRID_X0 + (idx % LETTER_GRID_COLS) * LETTER_GRID_STEP_X;
+    byte y = LETTER_GRID_Y0 + (idx / LETTER_GRID_COLS) * LETTER_GRID_STEP_Y;
+    // 1-char name; cell payload is space+letter+space to cleanly erase any
+    // previous '>' when the cursor moves through.
+    char buf[4];
+    buf[0] = selected ? '>' : ' ';
+    buf[1] = ' ';
+    buf[2] = item_names[idx][0];
+    buf[3] = 0;
+    print_at_color(x, y, buf, selected ? 1 : 14);
+}
+
+void update_letter_grid_cursor(int old_cursor, int new_cursor)
+{
+    if (old_cursor >= 0 && old_cursor < item_count)
+        draw_letter_cell(old_cursor, false);
+    if (new_cursor >= 0 && new_cursor < item_count)
+        draw_letter_cell(new_cursor, true);
+}
+
+static void draw_letter_grid(const char *title)
+{
+    clear_screen();
+    print_at_color(0, 0, title, 7);  // Yellow
+    for (int i = 0; i < item_count; i++)
+        draw_letter_cell(i, i == cursor);
+    print_at(0, 23, "arrows:move enter:sel del:back");
+}
+
 void draw_list(const char *title)
 {
+    if (current_page == PAGE_CATS && is_letter_grid())
+    {
+        draw_letter_grid(title);
+        return;
+    }
+
     clear_screen();
 
     // Title
@@ -1919,6 +1988,16 @@ int main(void)
                         draw_list("assembly64 - search");
                     }
                 }
+                else if (current_page == PAGE_CATS && is_letter_grid())
+                {
+                    // Letter grid: step up one row (= -LETTER_GRID_COLS).
+                    if (cursor >= LETTER_GRID_COLS)
+                    {
+                        int old = cursor;
+                        cursor -= LETTER_GRID_COLS;
+                        update_letter_grid_cursor(old, cursor);
+                    }
+                }
                 else if (cursor > 0)
                 {
                     int old = cursor;
@@ -2015,11 +2094,39 @@ int main(void)
                         draw_list("assembly64 - search");
                     }
                 }
+                else if (current_page == PAGE_CATS && is_letter_grid())
+                {
+                    // Letter grid: step down one row (= +LETTER_GRID_COLS).
+                    if (cursor + LETTER_GRID_COLS < item_count)
+                    {
+                        int old = cursor;
+                        cursor += LETTER_GRID_COLS;
+                        update_letter_grid_cursor(old, cursor);
+                    }
+                }
                 else if (cursor < item_count - 1)
                 {
                     int old = cursor;
                     cursor++;
                     update_cursor(old, cursor);
+                }
+                break;
+
+            case 'l':  // Grid left (letter grid only)
+                if (current_page == PAGE_CATS && is_letter_grid() && cursor > 0)
+                {
+                    int old = cursor;
+                    cursor--;
+                    update_letter_grid_cursor(old, cursor);
+                }
+                break;
+
+            case 'r':  // Grid right (letter grid only)
+                if (current_page == PAGE_CATS && is_letter_grid() && cursor + 1 < item_count)
+                {
+                    int old = cursor;
+                    cursor++;
+                    update_letter_grid_cursor(old, cursor);
                 }
                 break;
 
@@ -2062,6 +2169,7 @@ int main(void)
                     else
                     {
                         // List or Browse (type 'l' or 'b') - load entries
+                        menu_return_cursor = cursor;
                         strcpy(current_category, menu_paths[cursor]);
                         load_list_path(current_category, 0);
                         current_page = PAGE_LIST;
@@ -2132,6 +2240,7 @@ int main(void)
                     else
                     {
                         // List or Browse (type 'l' or 'b') - load entries
+                        menu_return_cursor = cursor;
                         strcpy(current_category, menu_paths[cursor]);
                         load_list_path(current_category, 0);
                         current_page = PAGE_LIST;

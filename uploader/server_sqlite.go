@@ -299,7 +299,13 @@ func (s *SQLiteServer) HandleMenu(path string) string {
 	slog.Debug("HandleMenu parts", "parts", parts, "len", len(parts))
 
 	if len(parts) == 0 {
-		return ".\n"
+		return "OK 0\n.\n"
+	}
+
+	// Letter-grid menu: when the user enters "Browse A-Z" we route here and
+	// return 27 list entries (A..Z plus #) that the client renders as a grid.
+	if parts[len(parts)-1] == "A-Z" {
+		return s.getLetterGridMenu(path)
 	}
 
 	category := parts[0]
@@ -320,7 +326,7 @@ func (s *SQLiteServer) HandleMenu(path string) string {
 	case "MYFILES":
 		return s.getMyFilesMenu(parts)
 	default:
-		return ".\n"
+		return "OK 0\n.\n"
 	}
 }
 
@@ -375,7 +381,7 @@ func (s *SQLiteServer) getGamesMenu(parts []string) string {
 		s.db.conn.QueryRow(`SELECT COUNT(*) FROM entries WHERE category = 'Games' AND source = ?`, source).Scan(&totalCount)
 
 		// Browse A-Z (type=b for browse)
-		entries = append(entries, fmt.Sprintf("b|Browse A-Z|Games/%s|%d", source, totalCount))
+		entries = append(entries, fmt.Sprintf("f|Browse A-Z|Games/%s/A-Z|%d", source, totalCount))
 
 		// Add special lists for CSDB
 		if source == "CSDB" {
@@ -399,7 +405,7 @@ func (s *SQLiteServer) getGamesMenu(parts []string) string {
 	}
 
 	// Games/Source/X - no longer needed, client uses LIST command
-	return ".\n"
+	return "OK 0\n.\n"
 }
 
 func (s *SQLiteServer) getDemosMenu(parts []string) string {
@@ -424,7 +430,7 @@ func (s *SQLiteServer) getDemosMenu(parts []string) string {
 		s.db.conn.QueryRow(`SELECT COUNT(*) FROM entries WHERE category = 'Demos' AND source = ?`, source).Scan(&totalCount)
 
 		// Browse A-Z (type=b for browse)
-		entries = append(entries, fmt.Sprintf("b|Browse A-Z|Demos/%s|%d", source, totalCount))
+		entries = append(entries, fmt.Sprintf("f|Browse A-Z|Demos/%s/A-Z|%d", source, totalCount))
 
 		if source == "CSDB" {
 			// Top 200
@@ -481,7 +487,7 @@ func (s *SQLiteServer) getDemosMenu(parts []string) string {
 		}
 	}
 
-	return ".\n"
+	return "OK 0\n.\n"
 }
 
 func (s *SQLiteServer) getMusicMenu(parts []string) string {
@@ -507,7 +513,7 @@ func (s *SQLiteServer) getMusicMenu(parts []string) string {
 		s.db.conn.QueryRow(`SELECT COUNT(*) FROM entries WHERE category = 'Music' AND source = ?`, source).Scan(&totalCount)
 
 		// Browse A-Z (type=b for browse)
-		entries = append(entries, fmt.Sprintf("b|Browse A-Z|Music/%s|%d", source, totalCount))
+		entries = append(entries, fmt.Sprintf("f|Browse A-Z|Music/%s/A-Z|%d", source, totalCount))
 
 		if source == "CSDB" {
 			var top200Count int
@@ -524,7 +530,7 @@ func (s *SQLiteServer) getMusicMenu(parts []string) string {
 		return b.String()
 	}
 
-	return ".\n"
+	return "OK 0\n.\n"
 }
 
 func (s *SQLiteServer) getIntrosMenu(parts []string) string {
@@ -548,7 +554,7 @@ func (s *SQLiteServer) getIntrosMenu(parts []string) string {
 		s.db.conn.QueryRow(`SELECT COUNT(*) FROM entries WHERE category = 'Intros' AND source = ?`, source).Scan(&totalCount)
 
 		// Browse A-Z (type=b for browse)
-		entries = append(entries, fmt.Sprintf("b|Browse A-Z|Intros/%s|%d", source, totalCount))
+		entries = append(entries, fmt.Sprintf("f|Browse A-Z|Intros/%s/A-Z|%d", source, totalCount))
 
 		var b strings.Builder
 		b.WriteString(fmt.Sprintf("OK %d\n", len(entries)))
@@ -559,7 +565,7 @@ func (s *SQLiteServer) getIntrosMenu(parts []string) string {
 		return b.String()
 	}
 
-	return ".\n"
+	return "OK 0\n.\n"
 }
 
 func (s *SQLiteServer) getGraphicsMenu(parts []string) string {
@@ -570,12 +576,12 @@ func (s *SQLiteServer) getGraphicsMenu(parts []string) string {
 
 		var b strings.Builder
 		b.WriteString("OK 1\n")
-		b.WriteString(fmt.Sprintf("b|Browse A-Z|Graphics|%d\n", totalCount))
+		b.WriteString(fmt.Sprintf("f|Browse A-Z|Graphics/A-Z|%d\n", totalCount))
 		b.WriteString(".\n")
 		return b.String()
 	}
 
-	return ".\n"
+	return "OK 0\n.\n"
 }
 
 func (s *SQLiteServer) getDiscmagsMenu(parts []string) string {
@@ -586,12 +592,12 @@ func (s *SQLiteServer) getDiscmagsMenu(parts []string) string {
 
 		var b strings.Builder
 		b.WriteString("OK 1\n")
-		b.WriteString(fmt.Sprintf("b|Browse A-Z|Discmags|%d\n", totalCount))
+		b.WriteString(fmt.Sprintf("f|Browse A-Z|Discmags/A-Z|%d\n", totalCount))
 		b.WriteString(".\n")
 		return b.String()
 	}
 
-	return ".\n"
+	return "OK 0\n.\n"
 }
 
 type letterCount struct {
@@ -625,6 +631,59 @@ func (s *SQLiteServer) getLetterCounts(category, source string) []letterCount {
 		}
 	}
 	return result
+}
+
+// getLetterGridMenu returns a menu of 27 entries (A..Z plus '#') for the
+// given A-Z path. Each entry is type 'l' so the client enters it as a LIST
+// filtered by first letter. The full path for each entry is the input path
+// plus '/' plus the letter, e.g. "Games/CSDB/A-Z/A". Counts come from
+// getLetterCounts; letters absent from the DB get count=0 but still appear
+// so the grid layout is predictable and the user sees all 27 positions.
+func (s *SQLiteServer) getLetterGridMenu(path string) string {
+	// The parent of /A-Z is Category[/Source] — strip the trailing /A-Z to
+	// reuse the existing category+source resolution in getLetterCounts.
+	parent := strings.TrimSuffix(path, "/A-Z")
+
+	parts := strings.Split(parent, "/")
+	category := ""
+	source := ""
+	if len(parts) >= 1 {
+		category = parts[0]
+	}
+	switch category {
+	case "Games", "Demos", "Music", "Intros":
+		if len(parts) >= 2 {
+			source = parts[1]
+		} else {
+			return "OK 0\n.\n"
+		}
+	case "Graphics", "Discmags":
+		source = "CSDB"
+	default:
+		return "OK 0\n.\n"
+	}
+
+	// Build a map letter -> count to merge with the fixed A..Z,# layout.
+	counts := map[string]int{}
+	for _, lc := range s.getLetterCounts(category, source) {
+		counts[lc.letter] = lc.count
+	}
+
+	letters := []string{
+		"A", "B", "C", "D", "E", "F", "G", "H", "I",
+		"J", "K", "L", "M", "N", "O", "P", "Q", "R",
+		"S", "T", "U", "V", "W", "X", "Y", "Z", "#",
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("OK %d\n", len(letters)))
+	for _, l := range letters {
+		// Protocol: type|name|path|count — name is just the letter itself
+		// so the client can render it in a grid cell.
+		b.WriteString(fmt.Sprintf("l|%s|%s/%s|%d\n", l, path, l, counts[l]))
+	}
+	b.WriteString(".\n")
+	return b.String()
 }
 
 // HandleLetters returns letter counts for a given path.
@@ -831,6 +890,14 @@ func (s *SQLiteServer) HandleListPath(path string, offset, count int, letter str
 	if len(parts) >= 3 {
 		subPath := parts[2]
 		switch subPath {
+		case "A-Z":
+			// Letter-grid leaf path: Category/Source/A-Z/<letter>.
+			// The /A-Z/ level exists purely so BROWSE A-Z behaves as a folder
+			// that opens the letter grid; the letter filter lives one level
+			// deeper.
+			if len(parts) >= 4 {
+				letterFilter = parts[3]
+			}
 		case "Top200":
 			whereClause += " AND top200_rank IS NOT NULL"
 		case "Top500":
@@ -854,7 +921,9 @@ func (s *SQLiteServer) HandleListPath(path string, offset, count int, letter str
 				args = append(args, parts[3])
 			}
 		default:
-			// It's a letter
+			// It's a letter at the Category/Source/<letter> level (legacy
+			// path without intermediate A-Z). Keep supporting it so existing
+			// clients don't break.
 			if len(subPath) == 1 && ((subPath >= "A" && subPath <= "Z") || subPath == "#") {
 				letterFilter = subPath
 			}
@@ -1125,22 +1194,22 @@ func (s *SQLiteServer) getMyFilesMenu(parts []string) string {
 	absBase, err := filepath.Abs("./myfiles")
 	if err != nil {
 		slog.Error("getMyFilesMenu: failed to resolve base path", "error", err)
-		return ".\n"
+		return "OK 0\n.\n"
 	}
 	absFull, err := filepath.Abs(dirPath)
 	if err != nil {
 		slog.Error("getMyFilesMenu: failed to resolve full path", "path", dirPath, "error", err)
-		return ".\n"
+		return "OK 0\n.\n"
 	}
 	if !strings.HasPrefix(absFull, absBase) {
 		slog.Warn("getMyFilesMenu: path traversal attempt blocked", "requested", subPath, "resolved", absFull)
-		return ".\n"
+		return "OK 0\n.\n"
 	}
 
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
 		slog.Error("getMyFilesMenu: failed to read directory", "path", dirPath, "error", err)
-		return ".\n"
+		return "OK 0\n.\n"
 	}
 
 	var b strings.Builder

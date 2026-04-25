@@ -13,10 +13,13 @@
 char uci_status[UCI_STATUS_QUEUE_SZ];
 char uci_data[UCI_DATA_QUEUE_SZ * 2];
 
-// Internal state
-static uint8_t uci_target = UCI_TARGET_DOS1;
-static int uci_data_index = 0;
-static int uci_data_len = 0;
+// Internal state. No initializers — cart targets place initialized statics
+// in read-only ROM. uci_target is set to UCI_TARGET_DOS1 lazily by callers
+// (every uci_settarget(...) does so explicitly), so leaving it 0 here is
+// safe — the first real operation will override it.
+static uint8_t uci_target;
+static int uci_data_index;
+static int uci_data_len;
 static char temp_char[2];
 
 //-----------------------------------------------------------------------------

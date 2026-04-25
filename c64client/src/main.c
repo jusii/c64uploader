@@ -17,8 +17,10 @@
 #define SERVER_PORT 6465  // Native protocol port
 #define SETTINGS_FILE "/Usb1/a64browser.cfg"
 
-// Settings structure
-static char server_host[32] = DEFAULT_SERVER_HOST;
+// Settings structure. Default value is set at runtime by init_state() so the
+// var lives in writable BSS — under cart targets, statics with explicit
+// initializers end up in cart ROM and become read-only.
+static char server_host[32];
 
 // Screen dimensions
 #define SCREEN_WIDTH  40
@@ -26,8 +28,8 @@ static char server_host[32] = DEFAULT_SERVER_HOST;
 #define LIST_HEIGHT   18  // Lines available for list display
 
 // UI state
-static byte socket_id = 0;
-static bool connected = false;
+static byte socket_id;
+static bool connected;
 
 // Pages: 0=cats, 1=list, 2=search, 3=settings, 6=info, 7=releases.
 // Page 4 / 5 (advanced search) are gone — replaced by the simple typed-query
@@ -49,11 +51,11 @@ static bool connected = false;
 #define MAX_ITEMS 32
 static char item_names[MAX_ITEMS][32];
 static long item_ids[MAX_ITEMS];
-static int  item_count = 0;
-static long total_count = 0;
-static int  cursor = 0;
-static int  offset = 0;
-static int  current_page = PAGE_CATS;
+static int  item_count;
+static long total_count;
+static int  cursor;
+static int  offset;
+static int  current_page;  // PAGE_CATS == 0; BSS zero-init is fine.
 
 // Current category
 static char current_category[48];  // Path for LISTPATH/RELEASES
@@ -78,30 +80,30 @@ static void draw_search_input(void);
 // in PETSCII, scancode 0x0F) cycles search_category through these labels.
 static const char *search_cat_names[] = {"All", "Games", "Demos", "Music"};
 static char search_query[24];
-static byte search_query_len = 0;
-static byte search_category = 0;
+static byte search_query_len;
+static byte search_category;
 // Two-mode search: cursor lives either in the input box (typing) or in the
 // result list (navigating). ENTER or cursor-down in the box runs the query
 // and switches modes; cursor-up at the top of the list (or DEL) returns to
 // the box. Typing only goes to the query while in the box, so held letters
 // can't ever corrupt query state by leaking into the result-nav path.
 #define SEARCH_MIN_QUERY_LEN 3
-static bool search_in_box = true;
+static bool search_in_box;  // Set to true by init_state() for cart safety.
 
 // Settings edit state
-static int  settings_cursor = 0;  // Which setting is selected
-static int  settings_edit_pos = 0;  // Cursor position in edit field
-static bool settings_editing = false;  // Are we editing a field?
+static int  settings_cursor;
+static int  settings_edit_pos;
+static bool settings_editing;
 
 // Line buffer for protocol
 static char line_buffer[128];
 
 // Info screen state
-static int info_return_page = PAGE_CATS;  // Page to return to after info
+static int info_return_page;  // PAGE_CATS == 0
 #define MAX_INFO_LINES 12
 static char info_labels[MAX_INFO_LINES][8];   // "NAME", "GROUP", etc.
 static char info_values[MAX_INFO_LINES][32];  // The values
-static int  info_line_count = 0;
+static int  info_line_count;
 
 // Grouped results state (for advanced search)
 static int  item_counts[MAX_ITEMS];    // Release count per grouped entry
@@ -111,13 +113,13 @@ static int  item_trainers[MAX_ITEMS];  // Trainer count per entry (-1=unknown, 0
 // Releases page state
 static char releases_title[32];        // Title being viewed
 static char releases_category[48];     // Path or category of releases
-static int  releases_return_page = PAGE_LIST;  // Where to return (PAGE_LIST or PAGE_SEARCH)
-static int  releases_return_offset = 0;  // Offset to restore when returning
-static int  releases_return_cursor = 0;  // Cursor position within page to restore
+static int  releases_return_page;  // Set to PAGE_LIST by init_state().
+static int  releases_return_offset;
+static int  releases_return_cursor;
 
 // When entering a LIST from a menu (including the A-Z letter grid), remember
 // where the cursor was so go_back can put it back rather than snap to item 0.
-static int  menu_return_cursor = 0;
+static int  menu_return_cursor;
 
 // VIC chip at $D000
 #define vic (*(struct VIC *)0xd000)
@@ -765,8 +767,10 @@ bool fetch_info(long id)
 #define KEY_INITIAL_DELAY 20  // ~400ms between fresh press and first auto-repeat
 #define KEY_REPEAT_RATE    4  // ~80ms between repeats (~12 Hz)
 
-static byte last_key_scan = 0xFF;  // 0xFF = no key being tracked
-static byte next_fire_jiffy = 0;
+// Initialized to 0xFF by init_state() — under cart targets a static `= 0xFF`
+// would land in read-only ROM and the auto-repeat tracker would never reset.
+static byte last_key_scan;
+static byte next_fire_jiffy;
 
 char get_key(void)
 {
@@ -1329,8 +1333,22 @@ void draw_info(void)
 // Main
 //-----------------------------------------------------------------------------
 
+// Set the handful of non-zero defaults that used to live as static
+// initializers. Cart targets keep initialized data in read-only ROM, so we
+// declare the variables uninitialized (BSS, zero-cleared at startup) and
+// assign their actual defaults here at runtime.
+static void init_state(void)
+{
+    strcpy(server_host, DEFAULT_SERVER_HOST);
+    search_in_box = true;
+    releases_return_page = PAGE_LIST;
+    last_key_scan = 0xFF;
+}
+
 int main(void)
 {
+    init_state();
+
     // Initialize menu state
     menu_path[0] = 0;
 

@@ -112,6 +112,35 @@ func parseKey(tok string) (byte, error) {
 	return 0, fmt.Errorf("unknown key %q (known: up down next prev info enter back right tab space q c slash, or a single char)", tok)
 }
 
+// hexDump formats bytes as a classic 16-byte-per-row hex+ASCII table starting
+// at the given hex base address (parsed for display only, not validation).
+func hexDump(baseHex string, data []byte) string {
+	var base int
+	fmt.Sscanf(baseHex, "%x", &base)
+	var b strings.Builder
+	for row := 0; row < len(data); row += 16 {
+		fmt.Fprintf(&b, "%04x  ", base+row)
+		for col := 0; col < 16; col++ {
+			if row+col < len(data) {
+				fmt.Fprintf(&b, "%02x ", data[row+col])
+			} else {
+				b.WriteString("   ")
+			}
+		}
+		b.WriteString(" |")
+		for col := 0; col < 16 && row+col < len(data); col++ {
+			c := data[row+col]
+			if c >= 32 && c < 127 {
+				b.WriteByte(c)
+			} else {
+				b.WriteByte('.')
+			}
+		}
+		b.WriteString("|\n")
+	}
+	return b.String()
+}
+
 // measureScrollRate holds a key via DEBUG_HOLD_SCAN for `dur` while sampling
 // the cursor row from screen RAM, then reports observed rows/sec. Sampling is
 // bounded by HTTP round-trip time (~10 Hz typical), so very fast scrolls will
@@ -219,6 +248,8 @@ func runDebug(args []string) {
 		fmt.Fprintf(os.Stderr, "  hold <direction>              Simulate held physical key (down/up/left/right) for auto-repeat test\n")
 		fmt.Fprintf(os.Stderr, "  release                       Stop simulated hold\n")
 		fmt.Fprintf(os.Stderr, "  scroll-rate <direction> <sec> Hold a key for N seconds and report rows/second\n")
+		fmt.Fprintf(os.Stderr, "  peek <hexaddr> <len>          Hex+ASCII dump of memory at hex address for len bytes\n")
+		fmt.Fprintf(os.Stderr, "  peekstr <hexaddr> [maxlen]    Read bytes at address, stop at NUL, print as C string\n")
 		fmt.Fprintf(os.Stderr, "  reset                         Soft reset the C64\n")
 		fmt.Fprintf(os.Stderr, "  reboot                        Reboot the Ultimate firmware\n")
 		fmt.Fprintf(os.Stderr, "  menu                          Press Ultimate menu button\n")
@@ -336,6 +367,46 @@ func runDebug(args []string) {
 			_ = client.WriteMemory(debugHoldHex, []byte{0})
 			os.Exit(1)
 		}
+	case "peek":
+		if fs.NArg() < 2 {
+			fmt.Fprintln(os.Stderr, "peek: need hex address and length")
+			os.Exit(1)
+		}
+		addr := fs.Arg(0)
+		var n int
+		if _, err := fmt.Sscanf(fs.Arg(1), "%d", &n); err != nil || n <= 0 {
+			fmt.Fprintf(os.Stderr, "peek: bad length %q\n", fs.Arg(1))
+			os.Exit(1)
+		}
+		data, err := client.ReadMemory(addr, n)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "peek failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(hexDump(addr, data))
+	case "peekstr":
+		if fs.NArg() < 1 {
+			fmt.Fprintln(os.Stderr, "peekstr: need hex address")
+			os.Exit(1)
+		}
+		addr := fs.Arg(0)
+		n := 64
+		if fs.NArg() >= 2 {
+			fmt.Sscanf(fs.Arg(1), "%d", &n)
+		}
+		data, err := client.ReadMemory(addr, n)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "peekstr failed: %v\n", err)
+			os.Exit(1)
+		}
+		end := len(data)
+		for i, b := range data {
+			if b == 0 {
+				end = i
+				break
+			}
+		}
+		fmt.Printf("$%s (%d bytes): %q\n", addr, end, string(data[:end]))
 	case "info":
 		data, err := client.ReadMemory("0400", 1)
 		if err != nil {

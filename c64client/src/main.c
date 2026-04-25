@@ -971,7 +971,7 @@ bool fetch_info(long id)
 // PAL and wraps every ~5s; all comparisons use modular byte arithmetic, so
 // short intervals (<128 ticks) behave correctly across wrap.
 #define JIFFY_LOW  (*(volatile byte *)0xA2)
-#define KEY_INITIAL_DELAY 16  // ~320ms between fresh press and first auto-repeat
+#define KEY_INITIAL_DELAY 20  // ~400ms between fresh press and first auto-repeat
 #define KEY_REPEAT_RATE    4  // ~80ms between repeats (~12 Hz)
 
 static byte last_key_scan = 0xFF;  // 0xFF = no key being tracked

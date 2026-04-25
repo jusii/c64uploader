@@ -1349,6 +1349,21 @@ int main(void)
 {
     init_state();
 
+    // VIC chip into a known good text-mode state. The KERNAL normally
+    // does this on boot; cart targets bypass that path, so the VIC may
+    // sit in whatever state the previous program left it (sometimes with
+    // the display disabled, or pointing at a non-default screen address).
+    // Without this explicit init the C64's video output stays black even
+    // though screen RAM at $0400 holds the right characters.
+    //   $D011 = 0x1B : display on, text mode, 25 rows, default Y-scroll
+    //   $D016 = 0xC8 : 40 cols, multicolor off, default X-scroll
+    //   $D018 = 0x14 : screen at $0400, charset at $1000
+    //   $DD00 = 0x97 : VIC bank 0 ($0000-$3FFF)
+    *((volatile byte *)0xDD00) = 0x97;
+    *((volatile byte *)0xD018) = 0x14;
+    *((volatile byte *)0xD016) = 0xC8;
+    *((volatile byte *)0xD011) = 0x1B;
+
     // Initialize menu state
     menu_path[0] = 0;
 

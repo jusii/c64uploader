@@ -821,7 +821,15 @@ char get_key(void)
         }
         else if (last_key_scan != 0xFF && key_pressed(last_key_scan))
         {
-            // Same scan code still held down on the matrix.
+            // Same scan code still held. Only the pure-navigation keys
+            // auto-repeat — held letter keys must NOT spam the search box
+            // with duplicate characters, and held action keys (Enter, DEL,
+            // /, Q, C) shouldn't either. Cursor up/down/left/right and W/S
+            // cover all the cases where holding actually helps (list scroll,
+            // grid scroll).
+            if (last_key_scan != KSCAN_W && last_key_scan != KSCAN_S &&
+                last_key_scan != KSCAN_CSR_DOWN && last_key_scan != KSCAN_CSR_RIGHT)
+                return 0;
             if ((byte)(now - next_fire_jiffy) >= 128)
                 return 0;
             next_fire_jiffy = now + KEY_REPEAT_RATE;

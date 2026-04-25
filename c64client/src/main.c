@@ -79,6 +79,13 @@ static const char *search_cat_names[] = {"All", "Games", "Demos", "Music"};
 static char search_query[24];
 static byte search_query_len = 0;
 static byte search_category = 0;
+// Debounce: every typed/deleted char in the search box updates the input
+// row immediately for visual feedback but defers the server SEARCH command
+// until JIFFY_LOW reaches search_due_jiffy. Each new keystroke pushes the
+// deadline forward, so a quick burst of typing/deleting only fires one query.
+#define SEARCH_DEBOUNCE_JIFFIES 12  // ~240ms of quiet before the query fires
+static bool search_pending = false;
+static byte search_due_jiffy = 0;
 
 // Settings edit state
 static int  settings_cursor = 0;  // Which setting is selected
@@ -1140,6 +1147,29 @@ void draw_list(const char *title)
         print_at(0, 23, "type:search c=:cat enter:run i:info del:bk");
 }
 
+// Repaint just the search input row (row 1). Cheap; safe to call on every
+// keystroke for instant typing feedback without triggering a full redraw or
+// a server round-trip.
+static void draw_search_input(void)
+{
+    clear_line(1);
+    print_at(0, 1, "[");
+    print_at_color(1, 1, search_cat_names[search_category], 5);
+    int x = 1 + strlen(search_cat_names[search_category]);
+    print_at(x, 1, "] ");
+    x += 2;
+    print_at(x, 1, search_query);
+    print_at(x + search_query_len, 1, "_");
+}
+
+// Mark the current query as needing a server search after the debounce
+// window expires. Called from typed-char, backspace, and Tab handlers.
+static void mark_search_pending(void)
+{
+    search_pending = true;
+    search_due_jiffy = JIFFY_LOW + SEARCH_DEBOUNCE_JIFFIES;
+}
+
 void draw_settings(void)
 {
     clear_screen();
@@ -1411,6 +1441,26 @@ int main(void)
 
     while (running)
     {
+        // Fire a deferred search once the debounce window has expired and
+        // no further keystroke has pushed search_due_jiffy forward. This
+        // turns auto-repeat-held DEL or fast typing from "one server query
+        // per keystroke" into "one server query after typing stops".
+        if (search_pending && current_page == PAGE_SEARCH)
+        {
+            byte now = JIFFY_LOW;
+            if ((byte)(now - search_due_jiffy) < 128)
+            {
+                search_pending = false;
+                if (search_query_len >= 2)
+                    do_search(search_query, 0);
+                else {
+                    item_count = 0;
+                    total_count = 0;
+                }
+                draw_list("assembly64 - search");
+            }
+        }
+
         char key = get_key();
 
         if (key != 0)
@@ -1445,6 +1495,7 @@ int main(void)
                     search_query[0] = 0;
                     search_query_len = 0;
                     search_category = 0;
+                    search_pending = false;
                     item_count = 0;
                     total_count = 0;
                     cursor = 0;
@@ -1457,9 +1508,9 @@ int main(void)
                 if (current_page == PAGE_SEARCH)
                 {
                     search_category = (search_category + 1) & 3;  // 0..3
+                    draw_search_input();
                     if (search_query_len >= 2)
-                        do_search(search_query, 0);
-                    draw_list("assembly64 - search");
+                        mark_search_pending();
                 }
                 break;
 
@@ -1783,13 +1834,16 @@ int main(void)
                     {
                         search_query_len--;
                         search_query[search_query_len] = 0;
+                        draw_search_input();
+                        // Defer the actual SEARCH; quick repeated DELs (auto-
+                        // repeat held) don't queue server round-trips.
                         if (search_query_len >= 2)
-                            do_search(search_query, 0);
+                            mark_search_pending();
                         else {
+                            search_pending = false;
                             item_count = 0;
                             total_count = 0;
                         }
-                        draw_list("assembly64 - search");
                     }
                     else
                     {
@@ -1875,7 +1929,9 @@ int main(void)
                 break;
 
             default:
-                // Typed alphanumeric in search mode → grow query, re-search
+                // Typed alphanumeric in search mode → grow query and defer
+                // the SEARCH command behind the debounce timer. Input row is
+                // repainted immediately so typing feels responsive.
                 if (current_page == PAGE_SEARCH &&
                     ((key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9')))
                 {
@@ -1883,9 +1939,9 @@ int main(void)
                     {
                         search_query[search_query_len++] = key;
                         search_query[search_query_len] = 0;
+                        draw_search_input();
                         if (search_query_len >= 2)
-                            do_search(search_query, 0);
-                        draw_list("assembly64 - search");
+                            mark_search_pending();
                     }
                 }
                 // Typed character in settings edit mode

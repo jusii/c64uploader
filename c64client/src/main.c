@@ -60,10 +60,10 @@ static const char *search_cat_names[] = {"All", "Games", "Demos", "Music"};
 
 // Advanced search form state
 #define ADV_FIELD_CAT     0
-#define ADV_FIELD_TITLE   1
-#define ADV_FIELD_GROUP   2
-#define ADV_FIELD_TYPE    3
-#define ADV_FIELD_TOP200  4
+#define ADV_FIELD_SOURCE  1
+#define ADV_FIELD_TITLE   2
+#define ADV_FIELD_GROUP   3
+#define ADV_FIELD_TYPE    4
 #define ADV_FIELD_SEARCH  5  // Execute search button
 #define ADV_FIELD_COUNT   6
 
@@ -73,12 +73,44 @@ static int  adv_edit_pos = 0;         // Cursor position in edit
 
 // Advanced search field values
 static int  adv_category = 0;         // 0=All, 1=Games, 2=Demos, 3=Music
+static int  adv_source = 0;           // Index into current category's source array
 static char adv_title[24];
 static char adv_group[24];
 static int  adv_type = 0;             // 0=Any, 1=prg, 2=d64, 3=crt, 4=sid
-static bool adv_top200 = false;
 
-static const char *adv_type_names[] = {"Any", "prg", "d64", "crt", "sid"};
+static const char *adv_type_names[] = {"Any", "prg", "d64", "crt", "sid", "tap", "t64", "d71", "d81", "g64"};
+
+// Source names per category (index 0 = "All" category uses all_sources)
+static const char *all_sources[] = {"Any", 0};
+static const char *games_sources[] = {"Any", "csdb", "c64com", "gamebase", "guybrush", "guybrush-ger", "oneload64", "mayhem-crt", "c64tapes", "preservers", "seuck", 0};
+static const char *demos_sources[] = {"Any", "csdb", "c64com", "guybrush", 0};
+static const char *music_sources[] = {"Any", "csdb", "hvsc", "2sid", "3sid", 0};
+static const char *intros_sources[] = {"Any", "csdb", "c64org", 0};
+static const char *graphics_sources[] = {"Any", "csdb", 0};
+static const char *discmags_sources[] = {"Any", "csdb", 0};
+
+// Map category index to sources array
+static const char **category_sources[] = {
+    all_sources,      // 0 = All
+    games_sources,    // 1 = Games
+    demos_sources,    // 2 = Demos
+    music_sources     // 3 = Music
+};
+
+// Get source count for current category
+static int get_source_count(void)
+{
+    const char **sources = category_sources[adv_category];
+    int count = 0;
+    while (sources[count] != 0) count++;
+    return count;
+}
+
+// Get current source name
+static const char *get_source_name(void)
+{
+    return category_sources[adv_category][adv_source];
+}
 
 // Settings edit state
 static int  settings_cursor = 0;  // Which setting is selected
@@ -516,6 +548,13 @@ void do_adv_search(int start)
         strcat(cmd, search_cat_names[adv_category]);
     }
 
+    // Add source filter (only if not "Any")
+    if (adv_source > 0)
+    {
+        strcat(cmd, " source=");
+        strcat(cmd, get_source_name());
+    }
+
     // Add title filter
     if (adv_title[0])
     {
@@ -535,12 +574,6 @@ void do_adv_search(int start)
     {
         strcat(cmd, " type=");
         strcat(cmd, adv_type_names[adv_type]);
-    }
-
-    // Add top200 filter
-    if (adv_top200)
-    {
-        strcat(cmd, " top200=1");
     }
 
     // Enable grouped mode
@@ -1179,6 +1212,13 @@ void draw_adv_field(int field, bool selected)
         print_at_color(13 + strlen(search_cat_names[adv_category]), y, "]", color);
         break;
 
+    case ADV_FIELD_SOURCE:
+        print_at_color(2, y, "source:", color);
+        print_at_color(10, y, "[", color);
+        print_at_color(11, y, get_source_name(), 5);
+        print_at_color(11 + strlen(get_source_name()), y, "]", color);
+        break;
+
     case ADV_FIELD_TITLE:
         print_at_color(2, y, "title:", color);
         if (adv_editing && selected)
@@ -1210,11 +1250,6 @@ void draw_adv_field(int field, bool selected)
         print_at_color(10, y, "[", color);
         print_at_color(11, y, adv_type_names[adv_type], 5);
         print_at_color(11 + strlen(adv_type_names[adv_type]), y, "]", color);
-        break;
-
-    case ADV_FIELD_TOP200:
-        print_at_color(2, y, "top200:", color);
-        print_at_color(10, y, adv_top200 ? "[yes]" : "[no]", adv_top200 ? 5 : 11);
         break;
 
     case ADV_FIELD_SEARCH:
@@ -1511,10 +1546,10 @@ int main(void)
                     adv_editing = false;
                     // Reset form fields
                     adv_category = 0;
+                    adv_source = 0;
                     adv_title[0] = 0;
                     adv_group[0] = 0;
                     adv_type = 0;
-                    adv_top200 = false;
                     item_count = 0;
                     total_count = 0;
                     cursor = 0;
@@ -1738,16 +1773,17 @@ int main(void)
                     if (adv_cursor == ADV_FIELD_CAT)
                     {
                         adv_category = (adv_category + 1) % 4;
+                        adv_source = 0;  // Reset source when category changes
+                        draw_adv_search();
+                    }
+                    else if (adv_cursor == ADV_FIELD_SOURCE)
+                    {
+                        adv_source = (adv_source + 1) % get_source_count();
                         draw_adv_search();
                     }
                     else if (adv_cursor == ADV_FIELD_TYPE)
                     {
-                        adv_type = (adv_type + 1) % 5;
-                        draw_adv_search();
-                    }
-                    else if (adv_cursor == ADV_FIELD_TOP200)
-                    {
-                        adv_top200 = !adv_top200;
+                        adv_type = (adv_type + 1) % 10;
                         draw_adv_search();
                     }
                 }

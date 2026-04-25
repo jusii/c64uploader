@@ -363,6 +363,7 @@ func handleAdvSearch(index *SearchIndex, params map[string]string, offset, count
 
 	// Extract filter parameters
 	category := params["cat"]
+	source := strings.ToLower(params["source"])
 	title := strings.ToLower(params["title"])
 	group := strings.ToLower(params["group"])
 	fileType := strings.ToLower(params["type"])
@@ -373,6 +374,13 @@ func handleAdvSearch(index *SearchIndex, params map[string]string, offset, count
 		// Category filter
 		if category != "" && !strings.EqualFold(category, "All") {
 			if !strings.EqualFold(entry.CategoryName, category) {
+				continue
+			}
+		}
+
+		// Source filter - check path for source identifier
+		if source != "" {
+			if !matchSource(entry.Path, source) {
 				continue
 			}
 		}
@@ -603,6 +611,59 @@ type groupedEntry struct {
 	FirstID         int // ID of first matching entry (for single releases)
 	Count           int // Number of releases with this title
 	MaxTrainers     int // Maximum trainer count among all releases (-1 = unknown)
+}
+
+// matchSource checks if an entry path matches a source filter.
+// Source names map to path components:
+// - csdb -> /CSDB/
+// - c64com -> /C64com/
+// - gamebase -> /Gamebase/
+// - guybrush -> /Guybrush/ (but not Guybrush-german)
+// - guybrush-ger -> /Guybrush-german/
+// - oneload64 -> /OneLoad64/
+// - mayhem-crt -> /Mayhem-crt/
+// - c64tapes -> /C64Tapes-org/
+// - preservers -> /Preservers/
+// - seuck -> /SEUCK/
+// - c64org -> /C64org/
+// - hvsc -> /HVSC/
+// - 2sid -> /2sid-collection/
+// - 3sid -> /3sid-collection/
+func matchSource(path, source string) bool {
+	pathLower := strings.ToLower(path)
+	switch source {
+	case "csdb":
+		return strings.Contains(pathLower, "/csdb/")
+	case "c64com":
+		return strings.Contains(pathLower, "/c64com/")
+	case "gamebase":
+		return strings.Contains(pathLower, "/gamebase/")
+	case "guybrush":
+		// Match /Guybrush/ but not /Guybrush-german/
+		return strings.Contains(pathLower, "/guybrush/") && !strings.Contains(pathLower, "/guybrush-german/")
+	case "guybrush-ger":
+		return strings.Contains(pathLower, "/guybrush-german/")
+	case "oneload64":
+		return strings.Contains(pathLower, "/oneload64/")
+	case "mayhem-crt":
+		return strings.Contains(pathLower, "/mayhem-crt/")
+	case "c64tapes":
+		return strings.Contains(pathLower, "/c64tapes-org/")
+	case "preservers":
+		return strings.Contains(pathLower, "/preservers/")
+	case "seuck":
+		return strings.Contains(pathLower, "/seuck/")
+	case "c64org":
+		return strings.Contains(pathLower, "/c64org/")
+	case "hvsc":
+		return strings.Contains(pathLower, "/hvsc/")
+	case "2sid":
+		return strings.Contains(pathLower, "/2sid-collection/")
+	case "3sid":
+		return strings.Contains(pathLower, "/3sid-collection/")
+	default:
+		return true // Unknown source, don't filter
+	}
 }
 
 // handleReleases returns all releases matching a specific title.

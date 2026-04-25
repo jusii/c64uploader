@@ -82,6 +82,37 @@ func (c *APIClient) WriteMemory(address string, data []byte) error {
 	return c.doRequest("POST", path, bytes.NewReader(data))
 }
 
+// ReadMemory reads `length` bytes of C64 memory starting at `address` (hex, no
+// prefix) via the machine:readmem DMA endpoint. The device returns raw bytes,
+// not JSON, so we do not share the doRequest helper.
+func (c *APIClient) ReadMemory(address string, length int) ([]byte, error) {
+	url := fmt.Sprintf("http://%s/v1/machine:readmem?address=%s&length=%d", c.Host, address, length)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("executing request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("readmem returned %s: %s", resp.Status, string(body))
+	}
+	return io.ReadAll(resp.Body)
+}
+
+// MenuButton presses the Ultimate menu button.
+func (c *APIClient) MenuButton() error {
+	return c.doRequest("PUT", "/v1/machine:menu_button", nil)
+}
+
+// Reboot reboots the device firmware.
+func (c *APIClient) Reboot() error {
+	return c.doRequest("PUT", "/v1/machine:reboot", nil)
+}
+
 // resetMachine resets the C64.
 func (c *APIClient) resetMachine() error {
 	return c.doRequest("PUT", "/v1/machine:reset", nil)

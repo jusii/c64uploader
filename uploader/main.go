@@ -144,7 +144,8 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  ftp <filename> <dest>     Upload a file via FTP to C64 Ultimate\n")
 	fmt.Fprintf(os.Stderr, "  poke <address>,<value>    Issue a POKE command to C64 memory\n")
 	fmt.Fprintf(os.Stderr, "  server                    Start the C64 protocol server (SQLite)\n")
-	fmt.Fprintf(os.Stderr, "  sqlitegen                 Generate SQLite database from Assembly64\n\n")
+	fmt.Fprintf(os.Stderr, "  sqlitegen                 Generate SQLite database from Assembly64\n")
+	fmt.Fprintf(os.Stderr, "  debug <sub>               Remote debug: screen, press, reset, reboot, menu, info\n\n")
 	fmt.Fprintf(os.Stderr, "Run 'c64uploader <command> -help' for command-specific options.\n")
 }
 
@@ -503,6 +504,8 @@ func main() {
 		runServer(os.Args[2:])
 	case "sqlitegen":
 		runSQLiteGen(os.Args[2:])
+	case "debug":
+		runDebug(os.Args[2:])
 	case "-h", "-help", "--help", "help":
 		printUsage()
 	default:

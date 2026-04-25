@@ -296,7 +296,7 @@ bool connect_to_server(void)
     connected = true;
 
     // Read greeting line "OK c64uploader"
-    uci_tcp_nextline(socket_id, line_buffer);
+    uci_tcp_nextline(socket_id, line_buffer, sizeof(line_buffer));
 
     print_status("connected!");
     return true;
@@ -319,6 +319,12 @@ void disconnect_from_server(void)
 // Forward declarations
 void load_list_path(const char *path, int start);
 
+// Check if server response is an error
+static bool is_error_response(void)
+{
+    return line_buffer[0] == 'E' && line_buffer[1] == 'R';
+}
+
 void send_command(const char *cmd)
 {
     if (!connected)
@@ -330,7 +336,7 @@ void send_command(const char *cmd)
 // Read a line from server, returns length
 int read_line(void)
 {
-    return uci_tcp_nextline(socket_id, line_buffer);
+    return uci_tcp_nextline(socket_id, line_buffer, sizeof(line_buffer));
 }
 
 // Parse "OK n total" response, returns n
@@ -356,6 +362,14 @@ void load_menu(const char *path)
 
     send_command(cmd);
     read_line();  // "OK n"
+
+    if (is_error_response())
+    {
+        item_count = 0;
+        total_count = 0;
+        print_status(line_buffer);
+        return;
+    }
 
     item_count = 0;
     total_count = parse_ok_count();
@@ -472,6 +486,15 @@ void load_list_path(const char *path, int start)
     send_command(cmd);
     read_line();  // "OK n total"
 
+    if (is_error_response())
+    {
+        item_count = 0;
+        total_count = 0;
+        cursor = 0;
+        print_status(line_buffer);
+        return;
+    }
+
     // Parse "OK n total"
     char *p = line_buffer + 3;
     int n = atoi(p);
@@ -520,106 +543,6 @@ void load_list_path(const char *path, int start)
     print_status("ready");
 }
 
-// Load entries for a category (grouped by title) - legacy
-void load_entries(const char *category, int start)
-{
-    print_status("loading...");
-
-    // Build command: "LIST category offset 20 grouped=1"
-    char cmd[64];
-    strcpy(cmd, "LIST ");
-    strcat(cmd, category);
-    strcat(cmd, " ");
-
-    // Convert offset to string
-    char num[8];
-    sprintf(num, "%d", start);
-    strcat(cmd, num);
-    strcat(cmd, " 20 grouped=1");
-
-    send_command(cmd);
-    read_line();  // "OK n total"
-
-    // Parse "OK n total"
-    char *p = line_buffer + 3;
-    int n = atoi(p);
-    p = strchr(p, ' ');
-    if (p)
-        total_count = atol(p + 1);
-
-    item_count = 0;
-    offset = start;
-
-    // Read entry lines until "."
-    // Grouped format: "id|name|category|count|trainers"
-    while (item_count < MAX_ITEMS && item_count < n)
-    {
-        read_line();
-        if (line_buffer[0] == '.')
-            break;
-
-        // Parse "id|name|category|count|trainers"
-        char *id_str = line_buffer;
-        char *name = strchr(id_str, '|');
-        if (name)
-        {
-            *name++ = 0;
-            item_ids[item_count] = atol(id_str);
-
-            // Find category (next |)
-            char *cat = strchr(name, '|');
-            if (cat)
-            {
-                *cat++ = 0;
-                // Find count (next |)
-                char *cnt = strchr(cat, '|');
-                if (cnt)
-                {
-                    *cnt++ = 0;
-                    // Find trainers (next |)
-                    char *trn = strchr(cnt, '|');
-                    if (trn)
-                    {
-                        *trn++ = 0;
-                        item_trainers[item_count] = atoi(trn);
-                    }
-                    else
-                    {
-                        item_trainers[item_count] = -1;
-                    }
-                    item_counts[item_count] = atoi(cnt);
-                    strncpy(item_cats[item_count], cat, 7);
-                    item_cats[item_count][7] = 0;
-                }
-                else
-                {
-                    item_counts[item_count] = 1;
-                    item_cats[item_count][0] = 0;
-                    item_trainers[item_count] = -1;
-                }
-            }
-            else
-            {
-                item_counts[item_count] = 1;
-                item_cats[item_count][0] = 0;
-                item_trainers[item_count] = -1;
-            }
-
-            strncpy(item_names[item_count], name, 31);
-            item_names[item_count][31] = 0;
-            item_count++;
-        }
-    }
-
-    // Consume remaining lines until "."
-    while (line_buffer[0] != '.')
-        read_line();
-
-    cursor = 0;
-    current_page = 1;
-    print_status("ready");
-}
-
 // Run selected entry
 void run_entry(long id)
 {
@@ -664,6 +587,16 @@ void do_search(const char *query, int start)
     send_command(cmd);
     read_line();  // "OK n total"
 
+    if (is_error_response())
+    {
+        item_count = 0;
+        total_count = 0;
+        cursor = 0;
+        current_page = PAGE_SEARCH;
+        print_status(line_buffer);
+        return;
+    }
+
     // Parse "OK n total"
     char *p = line_buffer + 3;
     int n = atoi(p);
@@ -701,11 +634,14 @@ void do_search(const char *query, int start)
     }
 
     // Consume remaining lines until "."
-    while (line_buffer[0] != '.')
-        read_line();
+    {
+        int safety = 100;
+        while (line_buffer[0] != '.' && safety-- > 0)
+            read_line();
+    }
 
     cursor = 0;
-    current_page = 2;
+    current_page = PAGE_SEARCH;
     print_status("ready");
 }
 
@@ -715,7 +651,7 @@ void do_adv_search(int start)
     print_status("searching...");
 
     // Build command: "ADVSEARCH offset count [key=value ...] grouped=1"
-    char cmd[96];
+    char cmd[160];
     sprintf(cmd, "ADVSEARCH %d 20", start);
 
     // Add category filter
@@ -758,6 +694,15 @@ void do_adv_search(int start)
 
     send_command(cmd);
     read_line();  // "OK n total"
+
+    if (is_error_response())
+    {
+        item_count = 0;
+        total_count = 0;
+        cursor = 0;
+        print_status(line_buffer);
+        return;
+    }
 
     // Parse "OK n total"
     char *p = line_buffer + 3;
@@ -831,8 +776,11 @@ void do_adv_search(int start)
     }
 
     // Consume remaining lines until "."
-    while (line_buffer[0] != '.')
-        read_line();
+    {
+        int safety = 100;
+        while (line_buffer[0] != '.' && safety-- > 0)
+            read_line();
+    }
 
     cursor = 0;
     print_status("ready");
@@ -850,11 +798,20 @@ void do_releases(const char *category, const char *title, int start)
     releases_category[47] = 0;
 
     // Build command: "RELEASES offset count category title"
-    char cmd[96];
+    char cmd[128];
     sprintf(cmd, "RELEASES %d 20 %s %s", start, category, title);
 
     send_command(cmd);
     read_line();  // "OK n total"
+
+    if (is_error_response())
+    {
+        item_count = 0;
+        total_count = 0;
+        cursor = 0;
+        print_status(line_buffer);
+        return;
+    }
 
     // Parse "OK n total"
     char *p = line_buffer + 3;
@@ -922,8 +879,11 @@ void do_releases(const char *category, const char *title, int start)
     }
 
     // Consume remaining lines until "."
-    while (line_buffer[0] != '.')
-        read_line();
+    {
+        int safety = 100;
+        while (line_buffer[0] != '.' && safety-- > 0)
+            read_line();
+    }
 
     cursor = 0;
     print_status("ready");
@@ -972,8 +932,11 @@ bool fetch_info(long id)
     }
 
     // Consume any remaining lines
-    while (line_buffer[0] != '.')
-        read_line();
+    {
+        int safety = 100;
+        while (line_buffer[0] != '.' && safety-- > 0)
+            read_line();
+    }
 
     print_status("ready");
     return info_line_count > 0;
@@ -983,8 +946,20 @@ bool fetch_info(long id)
 // Keyboard input
 //-----------------------------------------------------------------------------
 
+// Debug injection: uploader writes a semantic key code into $02A7 (reserved
+// unused KERNAL scratch byte) and get_key() consumes it as if the user pressed
+// a key. Non-zero value is returned verbatim and then cleared.
+#define DEBUG_KEY_INJECT (*(volatile byte *)0x02A7)
+
 char get_key(void)
 {
+    byte injected = DEBUG_KEY_INJECT;
+    if (injected)
+    {
+        DEBUG_KEY_INJECT = 0;
+        return (char)injected;
+    }
+
     keyb_poll();
 
     if (keyb_key & KSCAN_QUAL_DOWN)
@@ -1135,7 +1110,14 @@ void wait_key(void)
     while (keyb_key & KSCAN_QUAL_DOWN)
         keyb_poll();
     while (!(keyb_key & KSCAN_QUAL_DOWN))
+    {
+        if (DEBUG_KEY_INJECT)
+        {
+            DEBUG_KEY_INJECT = 0;
+            return;
+        }
         keyb_poll();
+    }
 }
 
 //-----------------------------------------------------------------------------
@@ -1516,8 +1498,8 @@ void draw_releases(void)
 {
     clear_screen();
 
-    // Title: "Title - releases"
-    char title[40];
+    // Title: "Title (count)"
+    char title[48];
     sprintf(title, "%s (%d)", releases_title, total_count);
     print_at_color(0, 0, title, 7);  // Yellow
 
@@ -1601,12 +1583,28 @@ int main(void)
     keyb_poll();
     while (keyb_key & KSCAN_QUAL_DOWN)
         keyb_poll();
-    while (!(keyb_key & KSCAN_QUAL_DOWN))
-        keyb_poll();
-    // Check if 'c' was pressed
-    byte k = keyb_key & 0x3f;
-    if (k == KSCAN_C)
-        need_config = true;
+
+    byte injected_splash = 0;
+    while (!injected_splash && !(keyb_key & KSCAN_QUAL_DOWN))
+    {
+        injected_splash = DEBUG_KEY_INJECT;
+        if (injected_splash)
+            DEBUG_KEY_INJECT = 0;
+        else
+            keyb_poll();
+    }
+
+    if (injected_splash)
+    {
+        if (injected_splash == 'c' || injected_splash == 'C')
+            need_config = true;
+    }
+    else
+    {
+        byte k = keyb_key & 0x3f;
+        if (k == KSCAN_C)
+            need_config = true;
+    }
 
     if (need_config)
     {

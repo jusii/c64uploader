@@ -162,6 +162,7 @@ void uci_change_dir(const char *directory)
     int len = strlen(directory);
     uint8_t *cmd = (uint8_t *)malloc(len + 2);
     int x;
+    if (!cmd) return;
 
     cmd[0] = 0x00;
     cmd[1] = DOS_CMD_CHANGE_DIR;
@@ -181,6 +182,7 @@ void uci_create_dir(const char *directory)
     int len = strlen(directory);
     uint8_t *cmd = (uint8_t *)malloc(len + 2);
     int x;
+    if (!cmd) return;
 
     cmd[0] = 0x00;
     cmd[1] = DOS_CMD_CREATE_DIR;
@@ -214,6 +216,7 @@ void uci_open_file(uint8_t attrib, const char *filename)
     int len = strlen(filename);
     uint8_t *cmd = (uint8_t *)malloc(len + 3);
     int x;
+    if (!cmd) return;
 
     cmd[0] = 0x00;
     cmd[1] = DOS_CMD_OPEN_FILE;
@@ -254,6 +257,7 @@ void uci_write_file(uint8_t *data, int length)
 {
     uint8_t *cmd = (uint8_t *)malloc(length + 4);
     int x;
+    if (!cmd) return;
 
     cmd[0] = 0x00;
     cmd[1] = DOS_CMD_WRITE_DATA;
@@ -276,6 +280,7 @@ void uci_delete_file(const char *filename)
     int len = strlen(filename);
     uint8_t *cmd = (uint8_t *)malloc(len + 2);
     int x;
+    if (!cmd) return;
 
     cmd[0] = 0x00;
     cmd[1] = DOS_CMD_DELETE_FILE;
@@ -296,6 +301,7 @@ void uci_rename_file(const char *filename, const char *newname)
     int len2 = strlen(newname);
     uint8_t *cmd = (uint8_t *)malloc(len1 + len2 + 3);
     int x;
+    if (!cmd) return;
 
     cmd[0] = 0x00;
     cmd[1] = DOS_CMD_RENAME_FILE;
@@ -319,6 +325,7 @@ void uci_copy_file(const char *sourcefile, const char *destfile)
     int len2 = strlen(destfile);
     uint8_t *cmd = (uint8_t *)malloc(len1 + len2 + 3);
     int x;
+    if (!cmd) return;
 
     cmd[0] = 0x00;
     cmd[1] = DOS_CMD_COPY_FILE;
@@ -345,6 +352,7 @@ void uci_mount_disk(uint8_t id, const char *filename)
     int len = strlen(filename);
     uint8_t *cmd = (uint8_t *)malloc(len + 3);
     int x;
+    if (!cmd) return;
 
     cmd[0] = 0x00;
     cmd[1] = DOS_CMD_MOUNT_DISK;
@@ -423,6 +431,7 @@ static uint8_t uci_connect(const char *host, uint16_t port, uint8_t netcmd)
     int len = strlen(host);
     uint8_t *cmd = (uint8_t *)malloc(len + 5);
     int x;
+    if (!cmd) return 0;
 
     cmd[0] = 0x00;
     cmd[1] = netcmd;
@@ -487,17 +496,23 @@ int uci_socket_read(uint8_t socketid, uint16_t length)
     return uci_data[0] | (uci_data[1] << 8);
 }
 
+// Static buffer for socket writes - avoids malloc/free per call
+static uint8_t write_cmd[192];
+
 static void uci_socket_write_internal(uint8_t socketid, const char *data, bool ascii)
 {
     uint8_t saved = uci_target;
     int len = strlen(data);
-    uint8_t *cmd = (uint8_t *)malloc(len + 3);
     int x;
     char c;
 
-    cmd[0] = 0x00;
-    cmd[1] = NET_CMD_SOCKET_WRITE;
-    cmd[2] = socketid;
+    // Clamp to buffer size (192 - 3 header bytes)
+    if (len > 189)
+        len = 189;
+
+    write_cmd[0] = 0x00;
+    write_cmd[1] = NET_CMD_SOCKET_WRITE;
+    write_cmd[2] = socketid;
 
     for (x = 0; x < len; x++)
     {
@@ -512,12 +527,11 @@ static void uci_socket_write_internal(uint8_t socketid, const char *data, bool a
             else if (c == 13)
                 c = 10;
         }
-        cmd[x + 3] = c;
+        write_cmd[x + 3] = c;
     }
 
     uci_settarget(UCI_TARGET_NETWORK);
-    uci_sendcommand(cmd, len + 3);
-    free(cmd);
+    uci_sendcommand(write_cmd, len + 3);
 
     uci_readdata();
     uci_readstatus();
@@ -625,11 +639,14 @@ char uci_tcp_nextchar(uint8_t socketid)
     }
     else
     {
+        int retries = 0;
         do
         {
             uci_data_len = uci_socket_read(socketid, UCI_DATA_QUEUE_SZ - 4);
             if (uci_data_len == 0)
                 return 0; // EOF
+            if (++retries > 5000)
+                return 0; // Timeout - connection likely dead
         } while (uci_data_len == -1);
 
         result = uci_data[2];
@@ -638,7 +655,7 @@ char uci_tcp_nextchar(uint8_t socketid)
     return result;
 }
 
-static int uci_tcp_nextline_internal(uint8_t socketid, char *result, bool swapcase)
+static int uci_tcp_nextline_internal(uint8_t socketid, char *result, int maxlen, bool swapcase)
 {
     int c, count = 0;
     *result = 0;
@@ -655,20 +672,21 @@ static int uci_tcp_nextline_internal(uint8_t socketid, char *result, bool swapca
             else if (c >= 65 && c <= 90)
                 c |= 32;
         }
-        result[count++] = c;
+        if (count < maxlen - 1)
+            result[count++] = c;
     }
     result[count] = 0;
     return c != 0 || count > 0;
 }
 
-int uci_tcp_nextline(uint8_t socketid, char *result)
+int uci_tcp_nextline(uint8_t socketid, char *result, int maxlen)
 {
-    return uci_tcp_nextline_internal(socketid, result, false);
+    return uci_tcp_nextline_internal(socketid, result, maxlen, false);
 }
 
-int uci_tcp_nextline_ascii(uint8_t socketid, char *result)
+int uci_tcp_nextline_ascii(uint8_t socketid, char *result, int maxlen)
 {
-    return uci_tcp_nextline_internal(socketid, result, true);
+    return uci_tcp_nextline_internal(socketid, result, maxlen, true);
 }
 
 void uci_tcp_emptybuffer(void)

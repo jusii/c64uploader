@@ -170,8 +170,8 @@ uint8_t uci_tcp_get_listen_socket(void);
 
 // Network - convenience read functions
 char uci_tcp_nextchar(uint8_t socketid);
-int  uci_tcp_nextline(uint8_t socketid, char *result);
-int  uci_tcp_nextline_ascii(uint8_t socketid, char *result);
+int  uci_tcp_nextline(uint8_t socketid, char *result, int maxlen);
+int  uci_tcp_nextline_ascii(uint8_t socketid, char *result, int maxlen);
 void uci_tcp_emptybuffer(void);
 void uci_reset_data(void);
 

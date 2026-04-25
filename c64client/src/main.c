@@ -15,7 +15,8 @@
 // Server configuration
 #define DEFAULT_SERVER_HOST "192.168.2.66"
 #define SERVER_PORT 6465  // Native protocol port
-#define SETTINGS_FILE "/Usb1/a64browser.cfg"
+#define SETTINGS_DIR  "/flash/config"
+#define SETTINGS_FILE "/flash/config/a64browser.cfg"
 
 // Settings structure. Default value is set at runtime by init_state() so the
 // var lives in writable BSS — under cart targets, statics with explicit
@@ -79,6 +80,7 @@ static void draw_search_input(void);
 // [category] <query>" and returns id|name|group|year|type rows. Tab (C= key
 // in PETSCII, scancode 0x0F) cycles search_category through these labels.
 static const char *search_cat_names[] = {"All", "Games", "Demos", "Music"};
+
 static char search_query[24];
 static byte search_query_len;
 static byte search_category;
@@ -229,6 +231,12 @@ void save_settings(void)
 {
     // Make sure we're targeting DOS, not network
     uci_settarget(UCI_TARGET_DOS1);
+
+    // Make sure the config directory exists. Convention shared with the
+    // prkl/Spiffy fork — branding and server.json live under /flash/config
+    // too. uci_create_dir is a no-op (with status set) if the directory
+    // already exists, so we don't bother checking.
+    uci_create_dir(SETTINGS_DIR);
 
     // Delete existing file first (ignore errors)
     uci_delete_file(SETTINGS_FILE);
@@ -1372,7 +1380,7 @@ int main(void)
     vic.color_back = VCOL_BLACK;
 
     clear_screen();
-    print_at(0, 0, "assembly64 browser");
+    print_at(0, 0, "assembly64 (local)");
     print_at(0, 2, "checking ultimate...");
 
     // Verify the Ultimate UCI is responding and report whatever

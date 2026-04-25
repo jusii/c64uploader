@@ -83,6 +83,7 @@ void go_back(void);
 void draw_list(const char *title);
 void draw_releases(void);
 void do_releases(const char *category, const char *title, int start);
+void run_myfile(const char *path);
 
 // Search category filter: 0=All, 1=Games, 2=Demos, 3=Music
 static int  search_category = 0;
@@ -670,6 +671,19 @@ void run_entry(long id)
 
     char cmd[32];
     sprintf(cmd, "RUN %ld", id);
+    send_command(cmd);
+
+    read_line();  // "OK Running xxx" or "ERR xxx"
+    print_status(line_buffer);
+}
+
+// Run file from MYFILES directory
+void run_myfile(const char *path)
+{
+    print_status("running...");
+
+    char cmd[64];
+    sprintf(cmd, "RUNFILE %s", path);
     send_command(cmd);
 
     read_line();  // "OK Running xxx" or "ERR xxx"
@@ -2003,11 +2017,16 @@ int main(void)
             case '>':  // Right arrow - enter menu item or releases
                 if (current_page == PAGE_CATS && item_count > 0)
                 {
-                    if (menu_types[cursor] == 'f')
+                    if (menu_types[cursor] == 'f' || menu_types[cursor] == 'D')
                     {
-                        // Folder - navigate into it
+                        // Folder or Directory - navigate into it
                         load_menu(menu_paths[cursor]);
                         draw_list(item_names[0] ? menu_path : "assembly64");
+                    }
+                    else if (menu_types[cursor] == 'F')
+                    {
+                        // File in MYFILES - run it directly
+                        run_myfile(menu_paths[cursor]);
                     }
                     else
                     {
@@ -2069,11 +2088,16 @@ int main(void)
                 if (current_page == PAGE_CATS && item_count > 0)
                 {
                     // Select menu item
-                    if (menu_types[cursor] == 'f')
+                    if (menu_types[cursor] == 'f' || menu_types[cursor] == 'D')
                     {
-                        // Folder - navigate into it
+                        // Folder or Directory - navigate into it
                         load_menu(menu_paths[cursor]);
                         draw_list(menu_path[0] ? menu_path : "assembly64");
+                    }
+                    else if (menu_types[cursor] == 'F')
+                    {
+                        // File in MYFILES - run it directly
+                        run_myfile(menu_paths[cursor]);
                     }
                     else
                     {

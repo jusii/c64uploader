@@ -165,6 +165,51 @@ func handleC64CommandSQLite(line string, server *SQLiteServer, apiClient *APICli
 		}
 		return "OK Running\n"
 
+	case "RUNFILE":
+		// Run a file from MYFILES directory by path
+		if len(parts) < 2 {
+			return "ERR Usage: RUNFILE <path>\n"
+		}
+		myPath := strings.Join(parts[1:], " ")
+		// Validate MYFILES prefix
+		if !strings.HasPrefix(myPath, "MYFILES/") {
+			return "ERR Invalid MYFILES path\n"
+		}
+		// Extract relative path after MYFILES/
+		relPath := strings.TrimPrefix(myPath, "MYFILES/")
+		filePath := filepath.Join("./myfiles", relPath)
+
+		// Security: Prevent path traversal attacks
+		absBase, err := filepath.Abs("./myfiles")
+		if err != nil {
+			return "ERR Internal error\n"
+		}
+		absFull, err := filepath.Abs(filePath)
+		if err != nil {
+			return "ERR Invalid path\n"
+		}
+		if !strings.HasPrefix(absFull, absBase) {
+			slog.Warn("RUNFILE: path traversal attempt blocked", "requested", myPath)
+			return "ERR Invalid path\n"
+		}
+
+		// Validate file extension
+		ext := strings.ToLower(filepath.Ext(filePath))
+		if !isValidMyFilesExtension(ext) {
+			return "ERR Invalid file type\n"
+		}
+
+		// Run the file
+		slog.Info("RUNFILE: executing file", "path", relPath)
+		fileData, err := os.ReadFile(filePath)
+		if err != nil {
+			return "ERR File not found\n"
+		}
+		if err := uploadAndRunFile(apiClient, fileData, filePath); err != nil {
+			return fmt.Sprintf("ERR Failed to run: %v\n", err)
+		}
+		return "OK Running\n"
+
 	case "RELEASES":
 		if len(parts) < 5 {
 			return "ERR Usage: RELEASES <offset> <count> <path> <title>\n"
@@ -284,12 +329,15 @@ func (s *SQLiteServer) getRootMenu() string {
 	// Static root menu with short type codes: f=folder, b=browse, l=list
 	categories := []string{"Games", "Demos", "Music", "Intros", "Graphics", "Discmags"}
 
-	b.WriteString(fmt.Sprintf("OK %d\n", len(categories)))
+	// +1 for My Files entry
+	b.WriteString(fmt.Sprintf("OK %d\n", len(categories)+1))
 	for _, cat := range categories {
 		count, _ := s.db.CountByPathPrefix(cat + "/")
 		// Protocol format: type|name|path|count
 		b.WriteString(fmt.Sprintf("f|%s|%s|%d\n", cat, cat, count))
 	}
+	// Add My Files as special folder pointing to MYFILES handler
+	b.WriteString("f|My Files|MYFILES|0\n")
 	b.WriteString(".\n")
 	return b.String()
 }

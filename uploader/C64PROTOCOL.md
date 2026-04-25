@@ -406,7 +406,55 @@ ERR <error_message>\n
 
 ---
 
-### 8. QUIT - Close Connection
+### 8. RUNFILE - Execute File from My Files
+
+The `RUNFILE` command uploads and executes a file from the user's personal `myfiles/` directory.
+
+#### Syntax
+```
+RUNFILE MYFILES/<path>
+```
+
+#### Arguments
+- `path`: Path to file within myfiles directory (e.g., `MYFILES/games/mygame.prg`)
+
+#### Response Format
+```
+OK Running\n
+```
+
+or
+
+```
+ERR <error_message>\n
+```
+
+#### Errors
+- `ERR Usage: RUNFILE <path>` - Missing path argument
+- `ERR Invalid MYFILES path` - Path doesn't start with MYFILES/
+- `ERR Invalid path` - Path traversal attempt or invalid path
+- `ERR Invalid file type` - File extension not supported
+- `ERR File not found` - File doesn't exist
+- `ERR Failed to run: <reason>` - Ultimate API error
+
+#### Supported File Types
+Same as RUN: .prg, .crt, .sid, .d64, .g64, .d71, .d81, .t64, .tap
+
+#### Example
+
+Request:
+```
+RUNFILE MYFILES/games/mygame.prg
+```
+
+Response:
+```
+OK Running
+```
+
+---
+
+### 9. QUIT - Close Connection
 
 The `QUIT` command closes the connection gracefully.
 

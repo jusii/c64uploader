@@ -29,10 +29,12 @@ static char server_host[32] = DEFAULT_SERVER_HOST;
 static byte socket_id = 0;
 static bool connected = false;
 
-// Pages: 0=cats, 1=list, 2=search, 3=settings, 4=advsearch, 5=advresults, 6=info, 7=releases
+// Pages: 0=cats, 1=list, 3=settings, 4=advsearch, 5=advresults, 6=info, 7=releases
+// Page 2 (PAGE_SEARCH) was a simple typing search mode that has no entry point
+// in the current UI; advanced search ('/' from root) replaced it. Constants
+// are kept numeric-stable so .lbl-based debug peeks across builds still line up.
 #define PAGE_CATS        0
 #define PAGE_LIST        1
-#define PAGE_SEARCH      2
 #define PAGE_SETTINGS    3
 #define PAGE_ADV_SEARCH  4
 #define PAGE_ADV_RESULTS 5
@@ -55,10 +57,8 @@ static int  cursor = 0;
 static int  offset = 0;
 static int  current_page = PAGE_CATS;
 
-// Current category or search query
+// Current category
 static char current_category[48];  // Path for LISTPATH/RELEASES
-static char search_query[32];
-static int  search_query_len = 0;
 
 // Menu navigation state
 static char menu_path[64];              // Current path like "Games/CSDB/All"
@@ -74,8 +74,7 @@ void run_myfile(const char *path);
 static bool is_letter_grid(void);
 void update_letter_grid_cursor(int old_cursor, int new_cursor);
 
-// Search category filter: 0=All, 1=Games, 2=Demos, 3=Music
-static int  search_category = 0;
+// Category labels shared by the advanced search form (cat= filter).
 static const char *search_cat_names[] = {"All", "Games", "Demos", "Music"};
 
 // Advanced search form state
@@ -580,82 +579,6 @@ void run_myfile(const char *path)
     print_status(line_buffer);
 }
 
-// Search entries
-void do_search(const char *query, int start)
-{
-    print_status("searching...");
-
-    // Build command: "SEARCH offset count [category] query"
-    char cmd[64];
-    if (search_category == 0) {
-        // All categories - don't include category parameter
-        sprintf(cmd, "SEARCH %d 20 %s", start, query);
-    } else {
-        // Specific category filter
-        sprintf(cmd, "SEARCH %d 20 %s %s", start, search_cat_names[search_category], query);
-    }
-
-    send_command(cmd);
-    read_line();  // "OK n total"
-
-    if (is_error_response())
-    {
-        item_count = 0;
-        total_count = 0;
-        cursor = 0;
-        current_page = PAGE_SEARCH;
-        print_status(line_buffer);
-        return;
-    }
-
-    // Parse "OK n total"
-    char *p = line_buffer + 3;
-    int n = atoi(p);
-    p = strchr(p, ' ');
-    if (p)
-        total_count = atol(p + 1);
-
-    item_count = 0;
-    offset = start;
-
-    // Read entry lines until "."
-    while (item_count < MAX_ITEMS && item_count < n)
-    {
-        read_line();
-        if (line_buffer[0] == '.')
-            break;
-
-        // Parse "id|name|group|year|type"
-        char *id_str = line_buffer;
-        char *name = strchr(id_str, '|');
-        if (name)
-        {
-            *name++ = 0;
-            item_ids[item_count] = atol(id_str);
-
-            // Find end of name (next |)
-            char *end = strchr(name, '|');
-            if (end)
-                *end = 0;
-
-            strncpy(item_names[item_count], name, 31);
-            item_names[item_count][31] = 0;
-            item_count++;
-        }
-    }
-
-    // Consume remaining lines until "."
-    {
-        int safety = 100;
-        while (line_buffer[0] != '.' && safety-- > 0)
-            read_line();
-    }
-
-    cursor = 0;
-    current_page = PAGE_SEARCH;
-    print_status("ready");
-}
-
 // Execute advanced search (grouped mode)
 void do_adv_search(int start)
 {
@@ -1087,41 +1010,6 @@ char get_key(void)
             if (k == KSCAN_CSR_RIGHT && !shift) return '>';  // Right = releases
             if (k == KSCAN_CSR_RIGHT && shift) return 8;  // Left = back
         }
-        // In search mode
-        else if (current_page == PAGE_SEARCH)
-        {
-            // Left arrow = back
-            if (k == KSCAN_CSR_RIGHT && shift) return 8;  // Left = back
-
-            // Tab = cycle category filter (C= key, scancode 0x0F)
-            if (k == 0x0F) return '\t';  // C= key for tab (cycle category)
-
-            // Navigation keys - always available when we have results
-            if (item_count > 0)
-            {
-                if (k == KSCAN_W || (k == KSCAN_CSR_DOWN && shift)) return 'u';
-                if (k == KSCAN_S || k == KSCAN_CSR_DOWN) return 'd';
-                if (k == KSCAN_N) return 'n';
-                if (k == KSCAN_P) return 'p';
-                if (k == KSCAN_I) return 'i';  // Info
-                if (k == KSCAN_CSR_RIGHT && !shift) return '\r';  // Right = run entry
-            }
-
-            // Return printable character using keyb_codes table
-            if (k < 64)
-            {
-                byte c = (byte)keyb_codes[shift ? k + 64 : k];
-                // ASCII lowercase a-z (0x61-0x7A) -> convert to uppercase
-                if (c >= 'a' && c <= 'z')
-                    return c - 32;  // Convert to uppercase A-Z
-                // ASCII uppercase A-Z (0x41-0x5A)
-                if (c >= 'A' && c <= 'Z')
-                    return c;
-                // Numbers 0-9 (0x30-0x39)
-                if (c >= '0' && c <= '9')
-                    return c;
-            }
-        }
         // In settings
         else if (current_page == PAGE_SETTINGS)
         {
@@ -1397,19 +1285,6 @@ void draw_list(const char *title)
     // Title
     print_at_color(0, 0, title, 7);  // Yellow
 
-    // Search input line (page 2 only)
-    if (current_page == 2)
-    {
-        // Show category filter
-        print_at(0, 1, "[");
-        print_at_color(1, 1, search_cat_names[search_category], 5);  // Green
-        print_at(1 + strlen(search_cat_names[search_category]), 1, "] ");
-        // Search input
-        int searchX = 3 + strlen(search_cat_names[search_category]);
-        print_at(searchX, 1, search_query);
-        print_at(searchX + search_query_len, 1, "_");  // Cursor
-    }
-
     // Info line
     if (item_count > 0)
     {
@@ -1446,8 +1321,6 @@ void draw_list(const char *title)
         print_at(0, 23, "w/s:move enter:sel /:search c:cfg q:quit");
     else if (current_page == PAGE_LIST)
         print_at(0, 23, "w/s:move enter:run >:rel i:info del:bk n/p:pg");
-    else
-        print_at(0, 23, "type:search c=:cat enter:run i:info del:bk");
 }
 
 void draw_settings(void)
@@ -1842,8 +1715,6 @@ int main(void)
             const char *title = "assembly64 - categories";
             if (current_page == PAGE_LIST)
                 title = current_category;
-            else if (current_page == PAGE_SEARCH)
-                title = "assembly64 - search";
 
             switch (key)
             {
@@ -1880,17 +1751,6 @@ int main(void)
                     cursor = 0;
                     offset = 0;
                     draw_adv_search();
-                }
-                break;
-
-            case '\t':  // Tab = cycle category in search mode
-                if (current_page == PAGE_SEARCH)
-                {
-                    search_category = (search_category + 1) % 4;  // 0-3: All, Games, Demos, Music
-                    // Re-search if we have a query
-                    if (search_query_len >= 2)
-                        do_search(search_query, 0);
-                    draw_list("assembly64 - search");
                 }
                 break;
 
@@ -1967,25 +1827,6 @@ int main(void)
                         cursor = item_count - 1;
                         if (cursor > LIST_HEIGHT - 1) cursor = LIST_HEIGHT - 1;
                         draw_list(current_category);
-                    }
-                }
-                else if (current_page == PAGE_SEARCH)
-                {
-                    if (cursor > 0)
-                    {
-                        int old = cursor;
-                        cursor--;
-                        update_cursor(old, cursor);
-                    }
-                    else if (offset > 0)
-                    {
-                        // At top of list, go to previous page
-                        int new_offset = offset - 20;
-                        if (new_offset < 0) new_offset = 0;
-                        do_search(search_query, new_offset);
-                        cursor = item_count - 1;
-                        if (cursor > LIST_HEIGHT - 1) cursor = LIST_HEIGHT - 1;
-                        draw_list("assembly64 - search");
                     }
                 }
                 else if (current_page == PAGE_CATS && is_letter_grid())
@@ -2074,24 +1915,6 @@ int main(void)
                         load_list_path(current_category, offset + 20);
                         cursor = 0;
                         draw_list(current_category);
-                    }
-                }
-                else if (current_page == PAGE_SEARCH)
-                {
-                    // Max visible is LIST_HEIGHT - 1 (0 to 17 for 18 items)
-                    int max_visible = LIST_HEIGHT - 1;
-                    if (cursor < item_count - 1 && cursor < max_visible)
-                    {
-                        int old = cursor;
-                        cursor++;
-                        update_cursor(old, cursor);
-                    }
-                    else if (offset + item_count < total_count)
-                    {
-                        // At bottom, go to next page
-                        do_search(search_query, offset + 20);
-                        cursor = 0;
-                        draw_list("assembly64 - search");
                     }
                 }
                 else if (current_page == PAGE_CATS && is_letter_grid())
@@ -2358,30 +2181,6 @@ int main(void)
                         draw_list("assembly64 - categories");
                     }
                 }
-                else if (current_page == PAGE_SEARCH)
-                {
-                    if (search_query_len > 0)
-                    {
-                        // Delete last char from search
-                        search_query_len--;
-                        search_query[search_query_len] = 0;
-                        // Re-search if query still has chars
-                        if (search_query_len >= 2)
-                            do_search(search_query, 0);
-                        else
-                        {
-                            item_count = 0;
-                            total_count = 0;
-                        }
-                        draw_list("assembly64 - search");
-                    }
-                    else
-                    {
-                        // Empty search, go back to categories
-                        load_categories();
-                        draw_list("assembly64 - categories");
-                    }
-                }
                 else if (current_page == PAGE_LIST || current_page == PAGE_CATS)
                 {
                     // Go back
@@ -2429,11 +2228,6 @@ int main(void)
                     load_list_path(current_category, offset + 20);
                     draw_list(current_category);
                 }
-                else if (current_page == PAGE_SEARCH && offset + item_count < total_count)
-                {
-                    do_search(search_query, offset + 20);
-                    draw_list("assembly64 - search");
-                }
                 else if (current_page == PAGE_ADV_RESULTS && offset + item_count < total_count)
                 {
                     do_adv_search(offset + 20);
@@ -2454,13 +2248,6 @@ int main(void)
                     load_list_path(current_category, new_offset);
                     draw_list(current_category);
                 }
-                else if (current_page == PAGE_SEARCH && offset > 0)
-                {
-                    int new_offset = offset - 20;
-                    if (new_offset < 0) new_offset = 0;
-                    do_search(search_query, new_offset);
-                    draw_list("assembly64 - search");
-                }
                 else if (current_page == PAGE_ADV_RESULTS && offset > 0)
                 {
                     int new_offset = offset - 20;
@@ -2478,7 +2265,7 @@ int main(void)
                 break;
 
             case 'i':  // Info
-                if ((current_page == PAGE_LIST || current_page == PAGE_SEARCH ||
+                if ((current_page == PAGE_LIST ||
                      current_page == PAGE_ADV_RESULTS || current_page == PAGE_RELEASES) && item_count > 0)
                 {
                     // Remember where to return
@@ -2498,8 +2285,6 @@ int main(void)
                     current_page = info_return_page;
                     if (current_page == PAGE_LIST)
                         draw_list(current_category);
-                    else if (current_page == PAGE_SEARCH)
-                        draw_list("assembly64 - search");
                     else if (current_page == PAGE_ADV_RESULTS)
                         draw_adv_results();
                     else if (current_page == PAGE_RELEASES)
@@ -2508,22 +2293,8 @@ int main(void)
                 break;
 
             default:
-                // Typed character in search mode
-                if (current_page == PAGE_SEARCH &&
-                    ((key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9')))
-                {
-                    if (search_query_len < 30)
-                    {
-                        search_query[search_query_len++] = key;
-                        search_query[search_query_len] = 0;
-                        // Search after 2+ chars
-                        if (search_query_len >= 2)
-                            do_search(search_query, 0);
-                        draw_list("assembly64 - search");
-                    }
-                }
                 // Typed character in settings edit mode
-                else if (current_page == PAGE_SETTINGS && settings_editing &&
+                if (current_page == PAGE_SETTINGS && settings_editing &&
                          ((key >= '0' && key <= '9') || key == '.'))
                 {
                     if (settings_edit_pos < 30)

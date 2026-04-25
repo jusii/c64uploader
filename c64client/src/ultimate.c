@@ -709,6 +709,16 @@ void uci_reset_data(void)
 // Drive control
 //-----------------------------------------------------------------------------
 
+void uci_pop_ultimate_menu(void)
+{
+    uint8_t cmd[] = {0x00, CTRL_CMD_FREEZE};
+    uci_settarget(UCI_TARGET_CONTROL);
+    uci_sendcommand(cmd, 2);
+    uci_readdata();
+    uci_readstatus();
+    uci_accept();
+}
+
 void uci_enable_drive_a(void)
 {
     uint8_t cmd[] = {0x00, CTRL_CMD_ENABLE_DISK_A};

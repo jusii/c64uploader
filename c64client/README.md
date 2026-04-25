@@ -107,14 +107,41 @@ The `ultimate.h/c` library provides access to Ultimate II+ Command Interface:
 
 ### Startup and Connect
 
-On launch you see a splash screen that reports Ultimate detection, the configured server IP, and the C64's IP address:
+On launch the browser silently probes the Ultimate (firmware ID + own IP), loads `/flash/config/a64browser.cfg`, and:
+
+- if `AUTOSTART=YES` and the saved server is reachable → connects and lands on the root category list
+- otherwise → shows the **config screen** with diagnostics at the top and editable rows for `SERVER`, `PORT`, `AUTOSTART`, plus `.CONNECT.` and `.SAVE.` actions. Any connection error is printed in the status bar so you know what to fix.
 
 ```
-C=CONFIG, ANY OTHER KEY=CONNECT
+ASSEMBLY64 (LOCAL)
+
+ULTIMATE-II DOS V1.2
+IP: 192.168.2.64
+
+> SERVER:    192.168.2.66
+  PORT:      6465
+  AUTOSTART: YES
+  .CONNECT.
+  .SAVE.
 ```
 
-- Press **C** to open Settings and edit the server IP (saved to `/Usb1/a64browser.cfg`)
-- Press any other key to connect
+| Key | Action |
+|-----|--------|
+| **W / cursor up**, **S / cursor down** | Move between fields |
+| **Enter** on `SERVER` / `PORT` | Edit value (Enter again commits, DEL erases a character) |
+| **Space** on `AUTOSTART` | Toggle YES / NO |
+| **Enter** on `.CONNECT.` | Connect with current in-memory values (does not write to disk) |
+| **Enter** on `.SAVE.` | Write the config file and connect |
+| **F1** | Open config from any other page |
+| **F7** | Exit — disconnect and pop the Ultimate menu |
+
+The config file is plain text:
+```
+192.168.2.66
+6465
+1
+```
+(host, port, autostart 0/1). It lives at `/flash/config/a64browser.cfg`, which matches the prkl/Spiffy convention; the directory is auto-created on first save.
 
 ### Category Tree
 
@@ -126,9 +153,9 @@ Once connected, you land on the root category list (`ASSEMBLY64 - CATEGORIES`). 
 | **S / cursor down** | Move cursor down |
 | **Enter / cursor right** | Enter category or folder |
 | **DEL / cursor left** | Back to parent menu |
-| **/** | Open advanced search |
-| **C** | Settings |
-| **Q** | Quit (root only) |
+| **/** | Open search (from root) |
+| **F1** | Open config screen |
+| **F7** | Exit (disconnect and pop the Ultimate menu) |
 
 The tree is: **Category → Source → [Browse A-Z, Top 200, Top 500, ...]**, e.g. `Games → CSDB → Browse A-Z`.
 
@@ -174,8 +201,7 @@ Entries display additional indicators:
 
 ### Search
 
-- **`/` from root** opens **Advanced Search** with filters for category, source, title, group, and type. Use **W/S** to move between fields, **Space** to toggle/cycle option fields, **Enter** to edit a text field or trigger the search when on `.SEARCH.`.
-- Simple search (typing directly in a list page) searches the current view's scope.
+Press **`/`** from the root menu to open search. The cursor starts in the input box; type to build a query (minimum 3 characters), Tab cycles the category filter (All / Games / Demos / Music). **Enter** or cursor-down switches to the result list; cursor-up at the top of the results (or **DEL**) returns to the input box. Two-mode design keeps held letters from corrupting the query during result navigation.
 
 ### Grouped Entry Indicators
 
@@ -233,14 +259,14 @@ See [`../uploader/C64PROTOCOL.md`](../uploader/C64PROTOCOL.md) for details.
 
 ## Configuration
 
-Default server host is set in `main.c`:
+Compile-time defaults in `main.c`:
 ```c
 #define DEFAULT_SERVER_HOST "192.168.2.66"
-#define SERVER_PORT 6465
-#define SETTINGS_FILE "/Usb1/a64browser.cfg"
+#define DEFAULT_SERVER_PORT 6465
+#define SETTINGS_FILE       "/flash/config/a64browser.cfg"
 ```
 
-Users typically change the server IP at runtime via the Settings screen (press **C** on the splash screen) rather than by recompiling. The setting is persisted to the Ultimate's filesystem and reloaded on next launch.
+Users change settings at runtime via the config screen (F1) — server host, port, and autostart are persisted to `/flash/config/a64browser.cfg` and reloaded on next launch. Only the compile-time defaults need recompilation.
 
 ## Debug Hooks
 

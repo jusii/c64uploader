@@ -263,8 +263,35 @@ The `a64browser` is a native C64 application located in the `c64client/` directo
    - **FTP + manual launch**: copy the .prg to the Ultimate's filesystem and load it from BASIC.
 
 4. On startup:
-   - Press **C** to configure server IP (saved to `/Usb1/a64browser.cfg`)
-   - Press any other key to connect with current settings
+   - The browser checks the Ultimate, captures the firmware ID and IP, then loads `/flash/config/a64browser.cfg`.
+   - If the saved `AUTOSTART` flag is on, it connects silently and lands on the root menu. Otherwise (or on connect failure) it shows the **config screen** with the error in the status bar.
+   - **F1** opens the config screen at any time; **F7** disconnects and pops the Ultimate menu.
+
+### Config Screen
+
+The first screen on a fresh install (and the screen you reach with F1):
+
+```
+ASSEMBLY64 (LOCAL)
+
+ULTIMATE-II DOS V1.2
+IP: 192.168.2.64
+
+> SERVER:    192.168.2.66
+  PORT:      6465
+  AUTOSTART: YES
+  .CONNECT.
+  .SAVE.
+```
+
+- **W/S** or cursor up/down — move between fields
+- **Enter** on `SERVER` / `PORT` — edit the value (Enter to commit)
+- **Space** on `AUTOSTART` — toggle YES / NO
+- **Enter** on `.CONNECT.` — connect with current values (does not save)
+- **Enter** on `.SAVE.` — write `/flash/config/a64browser.cfg` and connect
+- **F7** — exit (back to Ultimate menu)
+
+The settings file is a plain three-line text file: `host\nport\nautostart\n` where `autostart` is `0` or `1`.
 
 ### Controls
 
@@ -272,8 +299,8 @@ The `a64browser` is a native C64 application located in the `c64client/` directo
 - **W/S** or cursor up/down - Navigate rows (step by one in lists, step by a grid row in the A-Z grid)
 - **Enter** or right arrow - Enter category
 - **/** - Search mode (from root)
-- **C** - Settings menu
-- **Q** - Quit
+- **F1** - Config screen
+- **F7** - Exit (disconnect and pop the Ultimate menu)
 
 When a category menu includes `BROWSE A-Z`, selecting it opens a **27-cell letter grid** (A..Z plus `#` for titles that don't start with a letter). The grid has its own navigation:
 - **W/S** or cursor up/down - Move between grid rows (9 cells per row)
@@ -303,8 +330,9 @@ When a category menu includes `BROWSE A-Z`, selecting it opens a **27-cell lette
 - **Enter** - Edit text field or execute search
 - **DEL** - Delete character (in edit) or back to categories
 
-**Settings:**
-- **W/S** - Navigate
-- **Enter** - Edit field / Save
-- **DEL** - Delete character (in edit) or back (in menu)
-- Numbers and `.` - Enter IP address
+**Config screen (F1 from anywhere):**
+- **W/S** - Navigate fields
+- **Enter** - Edit field, run action (`.CONNECT.` / `.SAVE.`)
+- **Space** - Toggle `AUTOSTART`
+- **DEL** - Delete character (when editing) or back to previous page
+- Numbers and `.` - Enter IP address / port

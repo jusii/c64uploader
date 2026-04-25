@@ -104,7 +104,7 @@ U2P_HOST=192.168.1.50 make deploy   # or: ./c64uploader load build/a64browser.pr
 ```
 
 ### 4. Run on C64 and Configure Server
-Load `a64browser.prg` on your C64 with Ultimate II+. On first boot it shows the default server IP and "C=CONFIG, ANY OTHER KEY=CONNECT". Press **C** to edit the server IP (saved to `/Usb1/a64browser.cfg`), or any other key to connect with the current setting.
+Load `a64browser.prg` on your C64 with Ultimate II+. On first boot the browser shows the **config screen** with diagnostics (Ultimate firmware ID, C64 IP) and three editable fields: `SERVER`, `PORT`, `AUTOSTART`. Use `.SAVE.` to persist to `/flash/config/a64browser.cfg`; once `AUTOSTART=YES` the browser connects silently on subsequent boots. **F1** opens the config screen at any time, **F7** disconnects and pops the Ultimate menu.
 
 ## Content Sources
 

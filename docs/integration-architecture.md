@@ -252,11 +252,11 @@ Environment:
 Compile-time defaults in `main.c`:
 ```c
 #define DEFAULT_SERVER_HOST "192.168.2.66"
-#define SERVER_PORT 6465
-#define SETTINGS_FILE "/Usb1/a64browser.cfg"
+#define DEFAULT_SERVER_PORT 6465
+#define SETTINGS_FILE       "/flash/config/a64browser.cfg"
 ```
 
-The server host is overridable at runtime via the in-app Settings screen (press `C` on the splash/connect screen); the value is persisted to the Ultimate's filesystem.
+Server host, port, and the autostart flag are overridable at runtime via the in-app config screen (press **F1**); values are persisted to `/flash/config/a64browser.cfg` (three newline-separated lines: host, port, autostart 0/1) and reloaded on next boot.
 
 ## Deployment Topology
 

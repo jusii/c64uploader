@@ -75,6 +75,7 @@
 #define DOS_CMD_SET_TIME       0x27
 
 // Control commands
+#define CTRL_CMD_FREEZE         0x05  // Same as pressing the Ultimate menu button
 #define CTRL_CMD_ENABLE_DISK_A  0x30
 #define CTRL_CMD_DISABLE_DISK_A 0x31
 #define CTRL_CMD_ENABLE_DISK_B  0x32
@@ -174,6 +175,10 @@ int  uci_tcp_nextline(uint8_t socketid, char *result, int maxlen);
 int  uci_tcp_nextline_ascii(uint8_t socketid, char *result, int maxlen);
 void uci_tcp_emptybuffer(void);
 void uci_reset_data(void);
+
+// Trigger the Ultimate's menu button — pops up the firmware menu, where
+// the user can remove the cartridge, reset, or browse the filesystem.
+void uci_pop_ultimate_menu(void);
 
 // Drive control
 void uci_enable_drive_a(void);

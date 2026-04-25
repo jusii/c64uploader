@@ -14,14 +14,23 @@
 
 // Server configuration
 #define DEFAULT_SERVER_HOST "192.168.2.66"
-#define SERVER_PORT 6465  // Native protocol port
+#define DEFAULT_SERVER_PORT 6465
 #define SETTINGS_DIR  "/flash/config"
 #define SETTINGS_FILE "/flash/config/a64browser.cfg"
 
-// Settings structure. Default value is set at runtime by init_state() so the
-// var lives in writable BSS — under cart targets, statics with explicit
+// Settings structure. Defaults are set at runtime by init_state() so the
+// vars live in writable BSS — under cart targets, statics with explicit
 // initializers end up in cart ROM and become read-only.
 static char server_host[32];
+static int  server_port;
+static bool auto_connect;
+
+// Diagnostic strings captured once at boot from uci_identify and
+// uci_getipaddress. The config screen shows them at the top so they're
+// visible whether we got there via auto-connect failure or via F1 from
+// the main menu (without needing to re-poll the device).
+static char diag_ultimate[24];
+static char diag_ip[20];
 
 // Screen dimensions
 #define SCREEN_WIDTH  40
@@ -92,10 +101,19 @@ static byte search_category;
 #define SEARCH_MIN_QUERY_LEN 3
 static bool search_in_box;  // Set to true by init_state() for cart safety.
 
-// Settings edit state
+// Settings edit state. The config page (former PAGE_SETTINGS) has 5 rows:
+// SERVER (text), PORT (decimal int), AUTOCONN (toggle), CONNECT (action),
+// SAVE (action). settings_cursor is 0..CFG_FIELD_COUNT-1.
+#define CFG_FIELD_SERVER   0
+#define CFG_FIELD_PORT     1
+#define CFG_FIELD_AUTOCONN 2
+#define CFG_FIELD_CONNECT  3
+#define CFG_FIELD_SAVE     4
+#define CFG_FIELD_COUNT    5
 static int  settings_cursor;
 static int  settings_edit_pos;
 static bool settings_editing;
+static char port_edit_buf[8];  // Decimal-string scratch when editing PORT.
 
 // Line buffer for protocol
 static char line_buffer[128];
@@ -190,64 +208,111 @@ void print_status(const char *msg)
 // Settings
 //-----------------------------------------------------------------------------
 
+// Settings file format: three newline-terminated lines.
+//   line 1: server hostname or IP
+//   line 2: server port (decimal)
+//   line 3: auto-connect flag (0 or 1)
+// Older single-line files (server only) are accepted; missing trailing
+// fields keep their init_state defaults.
 void load_settings(void)
 {
-    // Make sure we're targeting DOS
     uci_settarget(UCI_TARGET_DOS1);
 
-    // Try to open settings file for reading
-    uci_open_file(0x01, SETTINGS_FILE);  // 0x01 = read
+    uci_open_file(0x01, SETTINGS_FILE);
     if (!uci_success())
-        return;  // No settings file, use defaults
+        return;
 
-    // Read server host
-    uci_read_file(31);
+    // Drain the read response into a local buffer. uci_readdata exits on
+    // the first transient !isdataavailable, so a single call can return a
+    // partial chunk; loop until we either fill the buffer or stop seeing
+    // new bytes after a wait. Without this drain the tail of the file
+    // bleeds into the next UCI call's response.
+    char buf[128];
+    int total = 0;
+    uci_read_file(127);
+    while (total < (int)sizeof(buf) - 1)
+    {
+        int timeout = 2000;
+        while (!uci_isdataavailable() && timeout > 0)
+            timeout--;
+        if (!uci_isdataavailable())
+            break;
+        int n = uci_readdata();
+        if (n <= 0)
+            break;
+        if (total + n > (int)sizeof(buf) - 1)
+            n = sizeof(buf) - 1 - total;
+        memcpy(buf + total, uci_data, n);
+        total += n;
+    }
+    buf[total] = 0;
 
-    // Wait for data to be available (with timeout)
-    int timeout = 1000;
-    while (!uci_isdataavailable() && timeout > 0)
-        timeout--;
-
-    int len = uci_readdata();
     uci_readstatus();
     uci_accept();
-
-    if (len > 0)
-    {
-        // Copy until newline or end
-        int i = 0;
-        while (i < 31 && i < len && uci_data[i] != 0 && uci_data[i] != '\n' && uci_data[i] != '\r')
-        {
-            server_host[i] = uci_data[i];
-            i++;
-        }
-        server_host[i] = 0;
-    }
-
     uci_close_file();
+
+    if (total <= 0)
+        return;
+
+    int len = total;
+    // Walk through up to 3 lines.
+    int i = 0;
+    int field = 0;
+    while (i < len && field < 3)
+    {
+        int start = i;
+        while (i < len && buf[i] != '\n' && buf[i] != '\r' && buf[i] != 0)
+            i++;
+        int line_len = i - start;
+        while (i < len && (buf[i] == '\n' || buf[i] == '\r'))
+            i++;
+
+        if (line_len > 0)
+        {
+            char line[32];
+            int n = line_len < 31 ? line_len : 31;
+            memcpy(line, &buf[start], n);
+            line[n] = 0;
+
+            switch (field)
+            {
+            case 0:
+                strcpy(server_host, line);
+                break;
+            case 1:
+                {
+                    int p = atoi(line);
+                    if (p > 0 && p < 65536)
+                        server_port = p;
+                }
+                break;
+            case 2:
+                auto_connect = (line[0] == '1');
+                break;
+            }
+        }
+        field++;
+    }
 }
 
 void save_settings(void)
 {
-    // Make sure we're targeting DOS, not network
     uci_settarget(UCI_TARGET_DOS1);
 
-    // Make sure the config directory exists. Convention shared with the
-    // prkl/Spiffy fork — branding and server.json live under /flash/config
-    // too. uci_create_dir is a no-op (with status set) if the directory
-    // already exists, so we don't bother checking.
+    // /flash/config matches the prkl/Spiffy convention; create_dir is a
+    // no-op if it already exists.
     uci_create_dir(SETTINGS_DIR);
 
-    // Delete existing file first (ignore errors)
     uci_delete_file(SETTINGS_FILE);
 
-    // Open settings file for writing (0x06 = create + write)
-    uci_open_file(0x06, SETTINGS_FILE);
+    uci_open_file(0x06, SETTINGS_FILE);  // 0x06 = create + write
     if (!uci_success())
         return;
 
-    // Write server host
-    uci_write_file((uint8_t*)server_host, strlen(server_host));
+    char line[40];
+    sprintf(line, "%s\n%d\n%d\n",
+            server_host, server_port, auto_connect ? 1 : 0);
+    uci_write_file((uint8_t*)line, strlen(line));
     uci_close_file();
 }
 
@@ -259,7 +324,7 @@ bool connect_to_server(void)
 {
     print_status("connecting...");
 
-    socket_id = uci_tcp_connect(server_host, SERVER_PORT);
+    socket_id = uci_tcp_connect(server_host, server_port);
 
     if (!uci_success())
     {
@@ -882,6 +947,8 @@ char get_key(void)
         // Always handle these
         if (k == KSCAN_RETURN) return '\r';
         if (k == KSCAN_DEL) return 8;  // Backspace
+        if (k == KSCAN_F1) return 'c';  // Open config screen
+        if (k == KSCAN_F7) return 0x18;  // Exit (hand off to Ultimate menu)
 
         // In category menu
         if (current_page == PAGE_CATS)
@@ -899,8 +966,8 @@ char get_key(void)
             }
             else
             {
-                if (k == KSCAN_Q) return 'q';
-                if (k == KSCAN_C) return 'c';  // Settings
+                // F1 (config) / F7 (exit) are handled globally above; no
+                // letter shortcuts at this level.
                 if (k == KSCAN_W) return 'u';
                 if (k == KSCAN_CSR_DOWN && shift) return 'u';
                 if (k == KSCAN_S || k == KSCAN_CSR_DOWN) return 'd';
@@ -920,18 +987,18 @@ char get_key(void)
             if (k == KSCAN_CSR_RIGHT && !shift) return '>';  // Right = releases
             if (k == KSCAN_CSR_RIGHT && shift) return 8;  // Left = back
         }
-        // In settings
+        // In the config page (server / port / autostart / connect / save).
         else if (current_page == PAGE_SETTINGS)
         {
             if (!settings_editing)
             {
                 if (k == KSCAN_W || (k == KSCAN_CSR_DOWN && shift)) return 'u';
                 if (k == KSCAN_S || k == KSCAN_CSR_DOWN) return 'd';
-                if (k == KSCAN_CSR_RIGHT && shift) return 8;  // Left = back
             }
             else
             {
-                // Editing mode - return typed characters
+                // Editing — digits and '.' for both SERVER (IP/host) and
+                // PORT (decimal) fields.
                 if (k < 64)
                 {
                     byte c = (byte)keyb_codes[shift ? k + 64 : k];
@@ -1190,7 +1257,7 @@ void draw_list(const char *title)
 
     // Help line
     if (current_page == PAGE_CATS)
-        print_at(0, 23, "w/s:move enter:sel /:search c:cfg q:quit");
+        print_at(0, 23, "w/s:move enter:sel /:srch f1:cfg f7:exit");
     else if (current_page == PAGE_LIST)
         print_at(0, 23, "w/s:move enter:run >:rel i:info del:bk n/p:pg");
     else if (current_page == PAGE_SEARCH)
@@ -1219,51 +1286,100 @@ static void draw_search_input(void)
         print_at_color(x + search_query_len, 1, "_", 5);
 }
 
-void draw_settings(void)
+// Draw a single config row at row y. Caller has already cleared the screen
+// (full redraw) or the row (cell update). value_color picks white for
+// "selected, not editing", green for "editing", light blue for "not selected".
+static void draw_cfg_field(int field, byte y)
 {
-    clear_screen();
-    print_at_color(0, 0, "settings", 7);  // Yellow
+    bool selected = (settings_cursor == field);
+    bool editing = selected && settings_editing;
+    byte label_color = selected ? 1 : 14;
+    byte value_color = editing ? 5 : (selected ? 1 : 14);
 
-    // Server IP field
-    byte y = 4;
-    if (settings_cursor == 0)
-    {
+    if (selected)
         print_at_color(0, y, ">", 1);
-        print_at_color(2, y, "server:", 1);
-        if (settings_editing)
+
+    switch (field)
+    {
+    case CFG_FIELD_SERVER:
+        print_at_color(2, y, "server:", label_color);
+        if (editing)
         {
-            print_at_color(10, y, server_host, 5);  // Green when editing
-            // Show cursor
-            print_at_color(10 + settings_edit_pos, y, "_", 5);
+            print_at_color(11, y, server_host, value_color);
+            print_at_color(11 + settings_edit_pos, y, "_", 5);
         }
         else
         {
-            print_at_color(10, y, server_host, 1);
+            print_at_color(11, y, server_host, value_color);
         }
+        break;
+
+    case CFG_FIELD_PORT:
+        print_at_color(2, y, "port:", label_color);
+        if (editing)
+        {
+            print_at_color(11, y, port_edit_buf, value_color);
+            print_at_color(11 + settings_edit_pos, y, "_", 5);
+        }
+        else
+        {
+            char buf[8];
+            sprintf(buf, "%d", server_port);
+            print_at_color(11, y, buf, value_color);
+        }
+        break;
+
+    case CFG_FIELD_AUTOCONN:
+        print_at_color(2, y, "autostart:", label_color);
+        print_at_color(13, y, auto_connect ? "yes" : "no", value_color);
+        break;
+
+    case CFG_FIELD_CONNECT:
+        print_at_color(2, y, "[connect]", label_color);
+        break;
+
+    case CFG_FIELD_SAVE:
+        print_at_color(2, y, "[save]", label_color);
+        break;
     }
-    else
+}
+
+// Row offsets used by both full redraw and cursor update.
+static byte cfg_row_for_field(int field)
+{
+    switch (field)
     {
-        print_at_color(2, y, "server:", 14);
-        print_at_color(10, y, server_host, 14);
+    case CFG_FIELD_SERVER:   return 6;
+    case CFG_FIELD_PORT:     return 8;
+    case CFG_FIELD_AUTOCONN: return 10;
+    case CFG_FIELD_CONNECT:  return 13;
+    case CFG_FIELD_SAVE:     return 15;
+    }
+    return 0;
+}
+
+void draw_settings(void)
+{
+    clear_screen();
+    print_at_color(0, 0, "assembly64 (local)", 7);  // Yellow
+
+    // Top diagnostics — captured once at boot, reused on every config redraw
+    if (diag_ultimate[0])
+        print_at_color(0, 2, diag_ultimate, 3);  // Cyan
+    if (diag_ip[0])
+        print_at_color(0, 3, diag_ip, 3);
+
+    for (int i = 0; i < CFG_FIELD_COUNT; i++)
+    {
+        byte y = cfg_row_for_field(i);
+        clear_line(y);
+        draw_cfg_field(i, y);
     }
 
-    // Save button
-    y = 6;
-    if (settings_cursor == 1)
-    {
-        print_at_color(0, y, ">", 1);
-        print_at_color(2, y, "[save]", 1);
-    }
-    else
-    {
-        print_at_color(2, y, "[save]", 14);
-    }
-
-    // Help
     if (settings_editing)
-        print_at(0, 23, "type ip  enter:done  del:erase");
+        print_at(0, 23, "type value  enter:done  del:erase");
     else
-        print_at(0, 23, "w/s:move enter:edit/save del:back");
+        print_at(0, 23, "w/s:move enter:run/edit f7:exit");
 }
 
 // Draw item for releases list with trainer count
@@ -1348,6 +1464,8 @@ void draw_info(void)
 static void init_state(void)
 {
     strcpy(server_host, DEFAULT_SERVER_HOST);
+    server_port = DEFAULT_SERVER_PORT;
+    auto_connect = false;
     search_in_box = true;
     releases_return_page = PAGE_LIST;
     last_key_scan = 0xFF;
@@ -1380,16 +1498,13 @@ int main(void)
     vic.color_back = VCOL_BLACK;
 
     clear_screen();
-    print_at(0, 0, "assembly64 (local)");
+    print_at_color(0, 0, "assembly64 (local)", 7);
     print_at(0, 2, "checking ultimate...");
 
-    // Verify the Ultimate UCI is responding and report whatever
-    // identification string the firmware sends back. DOS_CMD_IDENTIFY is the
-    // only UCI command that yields a textual id, and it identifies the DOS
-    // subsystem (e.g. "ULTIMATE-II DOS V1.2") rather than the hardware
-    // product — the firmware's product name (Ultimate II+, Ultimate 64,
-    // C64 Ultimate, ...) is compile-time and isn't exposed via UCI. So we
-    // print the device's own response verbatim instead of asserting a model.
+    // Verify the Ultimate UCI is responding. DOS_CMD_IDENTIFY returns a
+    // firmware subsystem string (e.g. "ULTIMATE-II DOS V1.2") — the actual
+    // product name (II+ / 64 / C64 Ultimate) is compile-time and not
+    // exposed via UCI, so we just show whatever the device tells us.
     uci_identify();
     if (!uci_success())
     {
@@ -1398,134 +1513,41 @@ int main(void)
         wait_key();
         return 1;
     }
+    strncpy(diag_ultimate, uci_data, sizeof(diag_ultimate) - 1);
+    diag_ultimate[sizeof(diag_ultimate) - 1] = 0;
 
-    print_at(0, 4, uci_data);
-    print_at(0, 6, "loading settings...");
-    load_settings();
-
-    print_at(0, 8, "server: ");
-    print_at(8, 8, server_host);
-
-    print_at(0, 10, "getting ip address...");
     uci_getipaddress();
     if (uci_success())
     {
-        // The NET_CMD_GET_IP_ADDRESS response is 4 raw bytes for the IP,
-        // not an ASCII string. Format as a.b.c.d.
-        char ipbuf[16];
-        sprintf(ipbuf, "%d.%d.%d.%d",
+        // 4 raw bytes returned, not ASCII.
+        sprintf(diag_ip, "ip: %d.%d.%d.%d",
                 (byte)uci_data[0], (byte)uci_data[1],
                 (byte)uci_data[2], (byte)uci_data[3]);
-        print_at(0, 12, "ip: ");
-        print_at(4, 12, ipbuf);
     }
 
-    print_at(0, 14, "c=config, any other key=connect");
+    load_settings();
 
-    // Wait for keypress and check if it's 'c' for config
-    bool need_config = false;
-    keyb_poll();
-    while (keyb_key & KSCAN_QUAL_DOWN)
-        keyb_poll();
+    // Auto-connect path: when the saved flag is set, attempt to connect
+    // once silently. Success → straight into the browser, no config UI.
+    // Failure → fall through to the config screen with the error in the
+    // status line so the user can fix something and retry.
+    bool autostarted = false;
+    if (auto_connect)
+        autostarted = connect_to_server();
 
-    byte injected_splash = 0;
-    while (!injected_splash && !(keyb_key & KSCAN_QUAL_DOWN))
+    if (autostarted)
     {
-        injected_splash = DEBUG_KEY_INJECT;
-        if (injected_splash)
-            DEBUG_KEY_INJECT = 0;
-        else
-            keyb_poll();
-    }
-
-    if (injected_splash)
-    {
-        if (injected_splash == 'c' || injected_splash == 'C')
-            need_config = true;
+        load_categories();
+        current_page = PAGE_CATS;
+        draw_list("assembly64 - categories");
     }
     else
     {
-        byte k = keyb_key & 0x3f;
-        if (k == KSCAN_C)
-            need_config = true;
-    }
-
-    if (need_config)
-    {
-        // Go to settings
         current_page = PAGE_SETTINGS;
-        settings_cursor = 0;
+        settings_cursor = CFG_FIELD_CONNECT;  // ENTER retries connect
         settings_editing = false;
-        settings_edit_pos = strlen(server_host);
         draw_settings();
-
-        // Settings loop - exit when user presses backspace from non-edit mode
-        while (current_page == PAGE_SETTINGS)
-        {
-            char key = get_key();
-            if (key == 'u' && !settings_editing && settings_cursor > 0)
-            {
-                settings_cursor--;
-                draw_settings();
-            }
-            else if (key == 'd' && !settings_editing && settings_cursor < 1)
-            {
-                settings_cursor++;
-                draw_settings();
-            }
-            else if (key == '\r')
-            {
-                if (settings_cursor == 0)
-                {
-                    settings_editing = !settings_editing;
-                    if (settings_editing)
-                        settings_edit_pos = strlen(server_host);
-                    draw_settings();
-                }
-                else if (settings_cursor == 1)
-                {
-                    print_status("saving...");
-                    save_settings();
-                    print_status("saved! connecting...");
-                    current_page = PAGE_CATS;  // Exit settings loop
-                }
-            }
-            else if (key == 8)  // Backspace
-            {
-                if (settings_editing && settings_edit_pos > 0)
-                {
-                    settings_edit_pos--;
-                    server_host[settings_edit_pos] = 0;
-                    draw_settings();
-                }
-                else if (!settings_editing)
-                {
-                    current_page = PAGE_CATS;  // Exit settings, try connect
-                }
-            }
-            else if (settings_editing && ((key >= '0' && key <= '9') || key == '.'))
-            {
-                if (settings_edit_pos < 30)
-                {
-                    server_host[settings_edit_pos++] = key;
-                    server_host[settings_edit_pos] = 0;
-                    draw_settings();
-                }
-            }
-        }
     }
-
-    // Connect to server
-    if (!connect_to_server())
-    {
-        print_at(0, 12, "press any key to exit");
-        wait_key();
-        return 1;
-    }
-
-    // Load categories
-    load_categories();
-    draw_list("assembly64 - categories");
 
     bool running = true;
 
@@ -1542,18 +1564,12 @@ int main(void)
 
             switch (key)
             {
-            case 'q':
-                if (current_page == PAGE_CATS)
-                    running = false;
-                break;
-
-            case 'c':  // Settings
-                if (current_page == PAGE_CATS)
+            case 'c':  // F1 from any page → config screen
+                if (current_page != PAGE_SETTINGS && current_page != PAGE_INFO)
                 {
                     current_page = PAGE_SETTINGS;
-                    settings_cursor = 0;
+                    settings_cursor = CFG_FIELD_SERVER;
                     settings_editing = false;
-                    settings_edit_pos = strlen(server_host);
                     draw_settings();
                 }
                 break;
@@ -1673,7 +1689,7 @@ int main(void)
             case 'd':  // Down (S key or cursor down)
                 if (current_page == PAGE_SETTINGS)
                 {
-                    if (settings_cursor < 1)  // 2 items: server, save
+                    if (settings_cursor < CFG_FIELD_COUNT - 1)
                     {
                         settings_cursor++;
                         draw_settings();
@@ -1861,23 +1877,58 @@ int main(void)
                 }
                 else if (current_page == PAGE_SETTINGS)
                 {
-                    if (settings_cursor == 0)
+                    if (settings_editing)
                     {
-                        // Toggle edit mode on server field
-                        settings_editing = !settings_editing;
-                        if (settings_editing)
-                            settings_edit_pos = strlen(server_host);
+                        // Confirm edit: parse PORT back into server_port if
+                        // we were editing that field; SERVER buffer is
+                        // already live-edited in place.
+                        if (settings_cursor == CFG_FIELD_PORT)
+                        {
+                            int p = atoi(port_edit_buf);
+                            if (p > 0 && p < 65536)
+                                server_port = p;
+                        }
+                        settings_editing = false;
                         draw_settings();
                     }
-                    else if (settings_cursor == 1)
+                    else
                     {
-                        // Save settings
-                        print_status("saving...");
-                        save_settings();
-                        print_status("saved!");
-                        // Go back to categories
-                        current_page = PAGE_CATS;
-                        draw_list("assembly64 - categories");
+                        switch (settings_cursor)
+                        {
+                        case CFG_FIELD_SERVER:
+                            settings_editing = true;
+                            settings_edit_pos = strlen(server_host);
+                            draw_settings();
+                            break;
+                        case CFG_FIELD_PORT:
+                            settings_editing = true;
+                            sprintf(port_edit_buf, "%d", server_port);
+                            settings_edit_pos = strlen(port_edit_buf);
+                            draw_settings();
+                            break;
+                        case CFG_FIELD_AUTOCONN:
+                            auto_connect = !auto_connect;
+                            draw_settings();
+                            break;
+                        case CFG_FIELD_CONNECT:
+                            // Try connecting now. On success enter the
+                            // browser; on failure stay on this page so the
+                            // user can fix something and try again.
+                            if (connect_to_server())
+                            {
+                                load_categories();
+                                current_page = PAGE_CATS;
+                                draw_list("assembly64 - categories");
+                            }
+                            // print_status already shows the error from
+                            // connect_to_server when it failed.
+                            break;
+                        case CFG_FIELD_SAVE:
+                            print_status("saving...");
+                            save_settings();
+                            print_status("saved!");
+                            break;
+                        }
                     }
                 }
                 else if (current_page == PAGE_SEARCH && search_in_box)
@@ -1904,19 +1955,30 @@ int main(void)
                 }
                 break;
 
+            case 0x18:  // F7 - exit by handing control to the Ultimate menu.
+                // The cart can't disable itself in software, but the
+                // Ultimate's firmware menu lets the user remove the
+                // cartridge or reset cleanly. Same as pressing the
+                // physical menu button on the device.
+                disconnect_from_server();
+                uci_pop_ultimate_menu();
+                break;
+
             case 8:  // Backspace
                 if (current_page == PAGE_SETTINGS)
                 {
                     if (settings_editing && settings_edit_pos > 0)
                     {
-                        // Delete last char from server_host
                         settings_edit_pos--;
-                        server_host[settings_edit_pos] = 0;
+                        if (settings_cursor == CFG_FIELD_SERVER)
+                            server_host[settings_edit_pos] = 0;
+                        else if (settings_cursor == CFG_FIELD_PORT)
+                            port_edit_buf[settings_edit_pos] = 0;
                         draw_settings();
                     }
-                    else if (!settings_editing)
+                    else if (!settings_editing && connected)
                     {
-                        // Go back to categories
+                        // Came from main menu via F1: go back to categories.
                         current_page = PAGE_CATS;
                         draw_list("assembly64 - categories");
                     }
@@ -2040,14 +2102,23 @@ int main(void)
                         draw_search_input();
                     }
                 }
-                // Typed character in settings edit mode
+                // Typed character in settings edit mode. SERVER takes IP-
+                // style chars, PORT takes digits only — '.' silently dropped
+                // there.
                 else if (current_page == PAGE_SETTINGS && settings_editing &&
                          ((key >= '0' && key <= '9') || key == '.'))
                 {
-                    if (settings_edit_pos < 30)
+                    if (settings_cursor == CFG_FIELD_SERVER && settings_edit_pos < 30)
                     {
                         server_host[settings_edit_pos++] = key;
                         server_host[settings_edit_pos] = 0;
+                        draw_settings();
+                    }
+                    else if (settings_cursor == CFG_FIELD_PORT && key != '.' &&
+                             settings_edit_pos < 5)
+                    {
+                        port_edit_buf[settings_edit_pos++] = key;
+                        port_edit_buf[settings_edit_pos] = 0;
                         draw_settings();
                     }
                 }

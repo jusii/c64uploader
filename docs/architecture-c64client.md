@@ -91,13 +91,13 @@ Lists themselves are still paginated at 20 entries per server page; MAX_ITEMS=32
 ```c
 #define PAGE_CATS        0   // Category / source / letter-grid menu
 #define PAGE_LIST        1   // Entry list (LISTPATH result)
-#define PAGE_SEARCH      2   // Simple text search
-#define PAGE_SETTINGS    3   // Server IP configuration
-#define PAGE_ADV_SEARCH  4   // Advanced search form
-#define PAGE_ADV_RESULTS 5   // Advanced search results
+#define PAGE_SEARCH      2   // Two-mode typed search (input box / result list)
+#define PAGE_SETTINGS    3   // Config screen — diagnostics + editable fields
 #define PAGE_INFO        6   // Entry info screen
 #define PAGE_RELEASES    7   // Releases of a title
 ```
+
+The former PAGE_ADV_SEARCH / PAGE_ADV_RESULTS pages were removed; the simple typed search at PAGE_SEARCH covers the same need against the server's `SEARCH` command. The previous splash screen was also removed — its job (Ultimate detection + IP capture + connect) is now done silently before any UI is drawn, with PAGE_SETTINGS doubling as the first-run / failed-autostart screen.
 
 **Back-navigation via path trimming:**
 
@@ -298,8 +298,10 @@ make runcrt   # Execute cartridge via REST API
 
 The CRT16 build runs as a 16 KB autostart cartridge mapped at `$8000-$BFFF`. Two oscar64 cart-runtime details govern how the source is written:
 
-1. **No data segment copy.** Oscar64's CRT8/CRT16 startup clears BSS but does not copy the data section from cart ROM to RAM. Any `static <type> x = <value>;` ends up at an address inside `$8000-$BFFF` and is read-only. **All globals/statics in `main.c` and `ultimate.c` are declared without initializers** so they land in BSS (zero-cleared on boot); the four genuinely non-zero defaults are assigned at runtime by `init_state()` at the top of `main()`:
+1. **No data segment copy.** Oscar64's CRT8/CRT16 startup clears BSS but does not copy the data section from cart ROM to RAM. Any `static <type> x = <value>;` ends up at an address inside `$8000-$BFFF` and is read-only. **All globals/statics in `main.c` and `ultimate.c` are declared without initializers** so they land in BSS (zero-cleared on boot); the genuinely non-zero defaults are assigned at runtime by `init_state()` at the top of `main()`:
    - `server_host` ← `DEFAULT_SERVER_HOST` via `strcpy`
+   - `server_port` ← `DEFAULT_SERVER_PORT`
+   - `auto_connect` ← `false`
    - `search_in_box` ← `true`
    - `releases_return_page` ← `PAGE_LIST`
    - `last_key_scan` ← `0xFF`
@@ -307,17 +309,37 @@ The CRT16 build runs as a 16 KB autostart cartridge mapped at `$8000-$BFFF`. Two
 
 The .prg variant uses the regular C64 boot path where the KERNAL initializes both the data segment and the VIC; the same source code runs identically in both.
 
+The CRT16 build currently exceeds the 16 KB slot (~16.5 KB) since the unified config screen and autostart logic landed; the .prg target is the supported deployment for now. Larger cart formats (32 KB / EasyFlash) are an open work item — the oscar64 `-tf=crt` runtime hits BSS placement errors out of the box and needs linker config investigation.
+
 ## Configuration
 
-**Compile-time (main.c):**
+**Compile-time defaults (main.c):**
 ```c
-#define SERVER_HOST "192.168.1.100"
-#define SERVER_PORT 6465
+#define DEFAULT_SERVER_HOST "192.168.2.66"
+#define DEFAULT_SERVER_PORT 6465
+#define SETTINGS_FILE       "/flash/config/a64browser.cfg"
 ```
 
-**Runtime Settings:**
-- Server IP (stored in settings)
-- Color scheme preferences
+**Runtime settings** (edited via the config screen, persisted to `/flash/config/a64browser.cfg`):
+- Server host / IP
+- Server port
+- Autostart flag (silent connect on boot)
+
+**Settings file format** — three newline-terminated lines:
+```
+192.168.2.66
+6465
+1
+```
+Older single-line files (host only) are accepted for backward compatibility; missing trailing fields keep their `init_state()` defaults.
+
+**Boot flow:**
+1. VIC init (cart only) → clear screen, draw "ASSEMBLY64 (LOCAL)"
+2. `uci_identify()` — abort with error if Ultimate unreachable
+3. `uci_getipaddress()` — cache as `diag_ip` for the config screen
+4. `load_settings()` — reads `/flash/config/a64browser.cfg` via DOS_CMD_READ_DATA, draining multi-packet reads into a local buffer (a single `uci_readdata` call exits on the first transient `!isdataavailable` and only returns a partial chunk)
+5. If `auto_connect`: silent `connect_to_server()` → on success, jump to PAGE_CATS
+6. Otherwise (or on failure): PAGE_SETTINGS with cursor on `.CONNECT.` and the error in the status bar
 
 ## Testing
 

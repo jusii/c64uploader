@@ -1375,17 +1375,23 @@ int main(void)
     print_at(0, 0, "assembly64 browser");
     print_at(0, 2, "checking ultimate...");
 
-    // Check Ultimate II+ is present
+    // Verify the Ultimate UCI is responding and report whatever
+    // identification string the firmware sends back. DOS_CMD_IDENTIFY is the
+    // only UCI command that yields a textual id, and it identifies the DOS
+    // subsystem (e.g. "ULTIMATE-II DOS V1.2") rather than the hardware
+    // product — the firmware's product name (Ultimate II+, Ultimate 64,
+    // C64 Ultimate, ...) is compile-time and isn't exposed via UCI. So we
+    // print the device's own response verbatim instead of asserting a model.
     uci_identify();
     if (!uci_success())
     {
-        print_at(0, 4, "ultimate ii+ not found!");
+        print_at(0, 4, "ultimate not found!");
         print_at(0, 6, "press any key to exit");
         wait_key();
         return 1;
     }
 
-    print_at(0, 4, "ultimate ii+ detected");
+    print_at(0, 4, uci_data);
     print_at(0, 6, "loading settings...");
     load_settings();
 

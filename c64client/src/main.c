@@ -1396,8 +1396,14 @@ int main(void)
     uci_getipaddress();
     if (uci_success())
     {
+        // The NET_CMD_GET_IP_ADDRESS response is 4 raw bytes for the IP,
+        // not an ASCII string. Format as a.b.c.d.
+        char ipbuf[16];
+        sprintf(ipbuf, "%d.%d.%d.%d",
+                (byte)uci_data[0], (byte)uci_data[1],
+                (byte)uci_data[2], (byte)uci_data[3]);
         print_at(0, 12, "ip: ");
-        print_at(4, 12, uci_data);
+        print_at(4, 12, ipbuf);
     }
 
     print_at(0, 14, "c=config, any other key=connect");

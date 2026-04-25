@@ -39,18 +39,10 @@ static bool connected = false;
 #define PAGE_INFO        6
 #define PAGE_RELEASES    7
 
-// Navigation stack for back button support
-#define MAX_PATH_DEPTH 8
-
-// NavStackEntry stores screen type and context for back navigation
-// Total size: 83 bytes × MAX_PATH_DEPTH(8) = 664 bytes
-typedef struct {
-    char screen_type;     // 'M'=Menu, 'L'=Letters, 'E'=Entries, 'R'=Releases
-    char path[48];        // Path for server command reconstruction
-    unsigned char offset; // Scroll offset to restore position
-    char letter;          // Letter for LISTPATH command (A-Z)
-    char title[32];       // For RELEASES reconstruction
-} NavStackEntry;          // 83 bytes × 8 = 664 bytes total
+// Navigation uses path trimming - no stack needed
+// The menu path hierarchy IS the navigation history:
+//   "" -> "Games" -> "Games/CSDB" -> entries
+// Going back = trim last path component
 
 // Menu/list state
 #define MAX_ITEMS 20
@@ -72,13 +64,7 @@ static char menu_path[64];              // Current path like "Games/CSDB/All"
 static char menu_paths[MAX_ITEMS][48];  // Path for each menu item
 static char menu_types[MAX_ITEMS];      // 'f'=folder, 'l'=list
 
-// Navigation stack for back button - stores screen type per level
-static NavStackEntry nav_stack[MAX_PATH_DEPTH];  // 664 bytes total
-static int nav_depth = 0;                        // Current stack depth
-
 // Forward declarations for navigation functions
-void push_nav_entry(char type, const char *path, int off, char let, const char *ttl);
-NavStackEntry* pop_nav_entry(void);
 void go_back(void);
 void draw_list(const char *title);
 void draw_releases(void);
@@ -355,7 +341,8 @@ int parse_ok_count(void)
     return atoi(p);
 }
 
-// Load categories from server
+// Load menu from server and display it
+// Sets menu_path, item_names, menu_paths, menu_types, item_count
 void load_menu(const char *path)
 {
     print_status("loading...");
@@ -404,103 +391,72 @@ void load_menu(const char *path)
         item_count++;
     }
 
-    // If menu returned 0 items but we have a path, treat it as a list path
-    // This handles terminal list paths like Games/CSDB/All/B
-    if (item_count == 0 && path[0])
-    {
-        // Go back one level since this path is a list, not a menu
-        char parent[64];
-        strncpy(parent, path, 63);
-        parent[63] = 0;
-        char *last = strrchr(parent, '/');
-        if (last)
-            *last = 0;
-        else
-            parent[0] = 0;
-
-        strncpy(menu_path, parent, 63);
-        menu_path[63] = 0;
-
-        // Load as list instead
-        strcpy(current_category, path);
-        load_list_path(path, 0);
-        current_page = PAGE_LIST;
-        return;
-    }
-
     // Save current path
     strncpy(menu_path, path, 63);
     menu_path[63] = 0;
 
     cursor = 0;
     offset = 0;
-    push_nav_entry('M', path, 0, 0, "");
     current_page = PAGE_CATS;
     print_status("ready");
 }
 
-// Push navigation entry to stack for back button support
-// type: 'M'=Menu, 'L'=Letters, 'E'=Entries, 'R'=Releases
-void push_nav_entry(char type, const char *path, int off, char let, const char *ttl)
+// Trim last path component: "Games/CSDB" -> "Games", "Games" -> ""
+static void trim_path(char *path)
 {
-    if (nav_depth >= MAX_PATH_DEPTH)
-        return;  // Stack full, can't push
-
-    NavStackEntry *entry = &nav_stack[nav_depth];
-    entry->screen_type = type;
-    strncpy(entry->path, path, 47);
-    entry->path[47] = 0;
-    entry->offset = (unsigned char)off;
-    entry->letter = let;
-    strncpy(entry->title, ttl, 31);
-    entry->title[31] = 0;
-
-    nav_depth++;
+    char *last = strrchr(path, '/');
+    if (last)
+        *last = 0;
+    else
+        path[0] = 0;
 }
 
-// Pop navigation entry and return pointer to previous screen
-// Returns NULL if at root (nav_depth <= 1)
-NavStackEntry* pop_nav_entry(void)
-{
-    if (nav_depth <= 1)
-        return NULL;  // At root, can't go back
-
-    nav_depth--;
-    return &nav_stack[nav_depth - 1];
-}
-
-// Navigate back using nav_stack - issues correct command per screen_type
+// Navigate back - uses path hierarchy instead of a stack
+// Menu paths are hierarchical: "" -> "Games" -> "Games/CSDB"
+// Going back = trim last component and reload
 void go_back(void)
 {
-    NavStackEntry *prev = pop_nav_entry();
-    if (!prev)
-        return;  // At root
+    if (current_page == PAGE_RELEASES)
+    {
+        // Releases -> back to entry list
+        // current_category and releases_return_offset already set
+        load_list_path(current_category, releases_return_offset);
+        current_page = PAGE_LIST;
+        draw_list(menu_path);
+    }
+    else if (current_page == PAGE_LIST)
+    {
+        // Entry list -> back to parent menu
+        // current_category holds the list path (e.g. "Games/CSDB")
+        // The parent menu path is the same (Browse A-Z is inside Games/CSDB menu)
+        // But we need to check: does MENU for this path return items?
+        // If so, show that menu. If not, trim further.
+        load_menu(current_category);
+        if (item_count > 0)
+        {
+            draw_list(menu_path[0] ? menu_path : "assembly64");
+        }
+        else
+        {
+            // Shouldn't happen normally, but fall back to parent
+            trim_path(menu_path);
+            load_menu(menu_path);
+            draw_list(menu_path[0] ? menu_path : "assembly64");
+        }
+    }
+    else if (current_page == PAGE_CATS)
+    {
+        // Menu -> back to parent menu (trim path)
+        if (menu_path[0] == 0)
+            return;  // Already at root, can't go back
 
-    switch (prev->screen_type) {
-        case 'M':
-            load_menu(prev->path);
-            nav_depth--;  // Undo push from load_menu - we're restoring, not navigating
-            draw_list(prev->path[0] ? prev->path : "assembly64");
-            break;
-        case 'E':
-            strcpy(current_category, prev->path);
-            load_list_path(prev->path, prev->offset);
-            current_page = PAGE_LIST;
-            draw_list(menu_path);
-            break;
-        case 'R':
-            strcpy(releases_category, prev->path);
-            strcpy(releases_title, prev->title);
-            do_releases(prev->path, prev->title, prev->offset);
-            current_page = PAGE_RELEASES;
-            draw_releases();
-            break;
-        default:
-            break;  // Unknown screen_type, do nothing
+        trim_path(menu_path);
+        load_menu(menu_path);
+        draw_list(menu_path[0] ? menu_path : "assembly64");
     }
 }
 
-// Legacy function - calls load_menu with empty path
+// Reset to root menu
 void load_categories(void)
 {
     load_menu("");
@@ -1332,7 +1288,6 @@ void draw_list(const char *title)
         sprintf(info, "%d-%d of %d", offset + 1, offset + item_count, total_count);
         print_at(0, 2, info);
     }
-
     // Draw items
     for (int i = 0; i < item_count && i < LIST_HEIGHT; i++)
     {
@@ -2030,9 +1985,8 @@ int main(void)
                     }
                     else
                     {
-                        // List - load entries
+                        // List or Browse (type 'l' or 'b') - load entries
                         strcpy(current_category, menu_paths[cursor]);
-                        push_nav_entry('E', menu_paths[cursor], 0, 0, "");
                         load_list_path(menu_paths[cursor], 0);
                         current_page = PAGE_LIST;
                         draw_list(item_names[0] ? item_names[0] : menu_path);
@@ -2047,7 +2001,6 @@ int main(void)
                         releases_title[31] = 0;
                         strncpy(releases_category, current_category, 47);
                         releases_category[47] = 0;
-                        push_nav_entry('R', releases_category, offset, 0, releases_title);
                         releases_return_page = PAGE_LIST;
                         releases_return_offset = offset;  // Save current offset
                         do_releases(releases_category, releases_title, 0);
@@ -2069,7 +2022,6 @@ int main(void)
                         releases_title[31] = 0;
                         strncpy(releases_category, item_cats[cursor], 7);
                         releases_category[7] = 0;
-                        push_nav_entry('R', releases_category, offset, 0, releases_title);
                         releases_return_page = PAGE_ADV_RESULTS;
                         releases_return_offset = offset;  // Save current offset
                         do_releases(releases_category, releases_title, 0);
@@ -2101,9 +2053,8 @@ int main(void)
                     }
                     else
                     {
-                        // List - load entries
+                        // List or Browse (type 'l' or 'b') - load entries
                         strcpy(current_category, menu_paths[cursor]);
-                        push_nav_entry('E', menu_paths[cursor], 0, 0, "");
                         load_list_path(menu_paths[cursor], 0);
                         current_page = PAGE_LIST;
                         draw_list(menu_path);
@@ -2172,7 +2123,6 @@ int main(void)
                     // If grouped entry with multiple releases, enter releases
                     if (item_counts[cursor] > 1)
                     {
-                        push_nav_entry('R', item_cats[cursor], offset, 0, item_names[cursor]);
                         do_releases(item_cats[cursor], item_names[cursor], 0);
                         current_page = PAGE_RELEASES;
                         draw_releases();
@@ -2238,7 +2188,7 @@ int main(void)
                 }
                 else if (current_page == PAGE_LIST || current_page == PAGE_CATS)
                 {
-                    // Go back using nav_stack
+                    // Go back
                     go_back();
                 }
                 else if (current_page == PAGE_ADV_SEARCH)
@@ -2272,7 +2222,7 @@ int main(void)
                 }
                 else if (current_page == PAGE_RELEASES)
                 {
-                    // Go back using nav_stack
+                    // Go back
                     go_back();
                 }
                 break;

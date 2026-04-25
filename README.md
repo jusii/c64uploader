@@ -21,6 +21,7 @@ A command-line tool that runs on your PC and communicates with the C64 Ultimate 
 - **FTP Mode** - Transfer files to the C64 Ultimate's filesystem via FTP
 - **Poke Mode** - Modify C64 memory addresses (useful for cheats and memory tricks)
 - **Server Mode** - Host a lightweight protocol server for the C64 client application
+- **Debug Mode** - Remote screen peek, key injection, and machine control for debugging the native C64 client
 
 ### a64browser (C64 native application)
 
@@ -182,6 +183,49 @@ This creates `c64uploader.db` in the assembly64 directory containing:
 - Pre-computed menu navigation hierarchy
 - Grouped entries by normalized title
 
+### Debug Mode
+
+Remotely inspect and drive the native C64 client running on a real C64 Ultimate. Useful when a menu navigation issue is hard to reproduce by hand — the tool reads the C64's text screen back as ASCII and injects keys through a small debug byte baked into `a64browser`. No extra setup on the Ultimate is needed beyond its standard HTTP API.
+
+```bash
+./c64uploader debug <subcommand> [options]
+```
+
+**Subcommands:**
+- `screen` - Read the current 40x25 text screen and render it as ASCII
+- `press <key>[,<key>...]` - Inject one or more keys (serialized, one at a time)
+- `hold <direction>` - Simulate a held physical key (`down`, `up`, `left`, `right`) to exercise auto-repeat
+- `release` - Stop a simulated hold
+- `scroll-rate <direction> <sec>` - Hold the key for N seconds and report observed rows/second
+- `peek <hexaddr> <len>` - Hex+ASCII dump of N bytes starting at address
+- `peekstr <hexaddr> [maxlen]` - Read up to maxlen bytes and print as a NUL-terminated C string
+- `reset` - Soft reset the C64
+- `reboot` - Reboot the Ultimate firmware
+- `menu` - Press the Ultimate menu button
+- `info` - Probe device reachability
+
+**Options** (all subcommands):
+- `-host <ip>` - C64 Ultimate hostname or IP address (default: `c64u`)
+- `-v` - Enable verbose debug logging
+- `-delay <duration>` - Delay between keys in `press` sequences (default: 80ms)
+
+**Key tokens for `press`:** `up`, `down`, `next`, `prev`, `info`, `enter`, `back`, `right`, `tab`, `space`, `q`, `c`, `slash`. Single characters (A-Z, 0-9, etc.) are passed through verbatim — lowercase for nav handlers (`i`, `n`, `p`, `r`, `l`) and uppercase for search-mode typing.
+
+**Examples:**
+```bash
+# Peek the current screen
+./c64uploader debug screen -host c64u
+
+# Navigate: down, down, enter (e.g. to walk into a category)
+./c64uploader debug press -host c64u down,down,enter
+
+# Measure auto-repeat scroll speed over a 2-second hold of cursor-down
+./c64uploader debug scroll-rate -host c64u down 2
+
+# Dump menu_path in the running a64browser (address from build/a64browser.lbl)
+./c64uploader debug peekstr -host c64u 6100
+```
+
 **Metadata extracted:**
 - Title, group, and release name
 - Crack information (trainers, flags like docs/fastload/highscore)
@@ -220,19 +264,27 @@ The `a64browser` is a native C64 application located in the `c64client/` directo
 
 ### Controls
 
-**Category list:**
-- **W/S** or cursor keys - Navigate up/down
+**Category list (and letter grid):**
+- **W/S** or cursor up/down - Navigate rows (step by one in lists, step by a grid row in the A-Z grid)
 - **Enter** or right arrow - Enter category
-- **/** - Search mode
+- **/** - Search mode (from root)
 - **C** - Settings menu
 - **Q** - Quit
 
+When a category menu includes `BROWSE A-Z`, selecting it opens a **27-cell letter grid** (A..Z plus `#` for titles that don't start with a letter). The grid has its own navigation:
+- **W/S** or cursor up/down - Move between grid rows (9 cells per row)
+- **Cursor left/right** or **A/D** - Move left/right within a row
+- **Enter** - Enter the selected letter's entry list
+- **Cursor left on column 0** (A, J, or S) - "Wall bump" back to the source menu
+- **DEL** - Back to the source menu
+
 **Entry list:**
-- **W/S** or cursor keys - Navigate up/down
-- **Enter** - Run selected entry
+- **W/S** or cursor keys - Navigate up/down (auto-advances pages at top/bottom of visible list)
+- **Enter** - Run selected entry (or open Releases if the entry has multiple versions)
 - **I** - View entry info (name, group, year, type, trainers)
 - **N/P** - Next/Previous page
-- **DEL** or left arrow - Back to categories
+- **right arrow** - Open Releases for entries with multiple versions
+- **DEL** or left arrow - Back to parent menu
 
 **Search mode:**
 - Type to search (minimum 2 characters)

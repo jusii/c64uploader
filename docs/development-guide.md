@@ -140,11 +140,16 @@ make clean
 # Generate database from Assembly64 collection
 ./c64uploader sqlitegen -assembly64 /path/to/collection
 
-# Run specific entry
-./c64uploader load 12345 -db /path/to/c64uploader.db
+# Upload and run a file (PRG, CRT, D64, ...) from disk or URL
+./c64uploader load -host c64u /path/to/game.prg
 
-# Upload and run file
-./c64uploader poke /path/to/game.prg
+# POKE a single byte via DMA
+./c64uploader poke -host c64u D020,0
+
+# Remote debug the running native client
+./c64uploader debug screen -host c64u
+./c64uploader debug press  -host c64u down,down,enter
+./c64uploader debug scroll-rate -host c64u down 2
 ```
 
 ### C64 Client
@@ -165,28 +170,52 @@ U2P_HOST=192.168.1.50 make runprg
 ### Protocol Testing
 
 ```bash
-# Start server
-./c64uploader server &
+# Start server (normally run from the repo root so it finds ./myfiles)
+cd uploader && go build -o ../c64uploader && cd ..
+./c64uploader server -assembly64 ~/Assembly64 &
 
-# Test commands with netcat
-echo "MENU" | nc localhost 6465
-echo "MENU Games/CSDB" | nc localhost 6465
-echo "LETTERS Games/CSDB" | nc localhost 6465
-echo "LISTPATH 0 20 Games/CSDB A" | nc localhost 6465
-echo "SEARCH 0 20 mario" | nc localhost 6465
-echo "INFO 12345" | nc localhost 6465
-echo "QUIT" | nc localhost 6465
+# Test commands with netcat (multiple probes in one connection)
+(printf 'MENU\n'; sleep 0.3;
+ printf 'MENU Games/CSDB\n'; sleep 0.3;
+ printf 'MENU Games/CSDB/A-Z\n'; sleep 0.3;
+ printf 'LISTPATH 0 5 Games/CSDB/A-Z/A\n'; sleep 0.3;
+ printf 'SEARCH 0 5 Games mario\n'; sleep 0.3;
+ printf 'QUIT\n') | nc -q 1 localhost 6465
 ```
+
+`MENU Games/CSDB/A-Z` returns the 27-entry letter-grid menu; `LISTPATH 0 5 Games/CSDB/A-Z/A` returns the first five A-titled games.
 
 ### C64 Client Testing
 
 ```bash
-# Test in VICE
+# Test in VICE emulator
 make run
 
 # Debug output visible in status bar (row 24)
 # Use print_status() in code for debugging
 ```
+
+### Remote Debugging on Real Hardware
+
+When a bug reproduces only on the real Ultimate and not in VICE, drive the running a64browser from the PC via the Ultimate's HTTP API:
+
+```bash
+# Snapshot the text screen as ASCII
+./c64uploader debug screen -host c64u
+
+# Inject keys. Named tokens: up down next prev info enter back right tab space q c slash
+# Single characters pass through verbatim (use lowercase for nav handlers)
+./c64uploader debug press -host c64u down,down,enter
+
+# Peek any global variable — find its address in c64client/build/a64browser.lbl
+grep menu_path c64client/build/a64browser.lbl   # e.g. al 6100 .menu_path
+./c64uploader debug peekstr -host c64u 6100
+
+# Measure auto-repeat scroll speed under a simulated held key
+./c64uploader debug scroll-rate -host c64u down 2
+```
+
+Two reserved bytes in the client make this possible: `$02A7 DEBUG_KEY_INJECT` (single-shot key) and `$02A8 DEBUG_HOLD_SCAN` (simulated matrix hold). Both stay zero in normal use.
 
 ### Database Testing
 

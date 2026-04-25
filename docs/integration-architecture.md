@@ -55,14 +55,16 @@
 
 | Command | Request | Response |
 |---------|---------|----------|
-| MENU | `MENU [path]` | `type\|name\|path\|count` |
-| LETTERS | `LETTERS path` | `letter\|count` |
-| LISTPATH | `LISTPATH off cnt path [letter]` | `id\|title\|group\|trainers\|releases\|type` |
+| MENU | `MENU [path]` | `type\|name\|path\|count` — path ending in `/A-Z` yields a 27-entry letter grid |
+| LETTERS | `LETTERS path` | `letter\|count` (legacy; client now uses MENU `/A-Z`) |
+| LISTPATH | `LISTPATH off cnt path [letter]` | `id\|title\|cat\|releases\|trainers` |
+| LIST | alias of LISTPATH | same |
 | SEARCH | `SEARCH off cnt [cat] query` | `id\|title\|group\|year\|type` |
-| INFO | `INFO id` | `field\|value` pairs |
+| INFO | `INFO id` | `LABEL\|value` pairs (variable set) |
 | RUN | `RUN id` | `OK` or `ERR` |
-| RELEASES | `RELEASES off cnt path title` | `id\|title\|group\|trainers` |
-| QUIT | `QUIT` | (connection closed) |
+| RUNFILE | `RUNFILE MYFILES/<path>` | `OK Running` or `ERR` |
+| RELEASES | `RELEASES off cnt path title` | `id\|group\|year\|type\|trainers` |
+| QUIT | `QUIT` | `OK Goodbye` then connection closed |
 
 ### 2. File Execution (REST API / FTP)
 
@@ -85,7 +87,22 @@
 7. Ultimate: Executes file, C64 resets into program
 ```
 
-### 3. Database Synchronization
+### 3. Remote Debug Channel (HTTP via Ultimate REST API)
+
+**Direction:** PC tool (`c64uploader debug ...`) ↔ Ultimate II+ ↔ running a64browser
+
+**Transport:** Ultimate's built-in HTTP API (`/v1/machine:readmem`, `/v1/machine:writemem`, `/v1/machine:reset`, etc.). No C64-side networking needed — the debug tool talks to the Ultimate directly, not through the native protocol server.
+
+**Used for:** diagnosing client-side navigation or rendering issues in the a64browser without sitting at the C64. Two reserved scratch bytes in the client act as a one-way control channel:
+
+| Address | Purpose | Producer | Consumer |
+|---------|---------|----------|----------|
+| `$02A7` | Single-shot key press | `debug press` | `get_key()` / `wait_key()` in the client |
+| `$02A8` | Simulated held matrix key | `debug hold` | `get_key()` (bypasses `keyb_poll`) |
+
+Screen inspection reads $0400 (text screen) directly via `machine:readmem` and decodes C64 screen codes to printable ASCII on the PC side — no cooperation from the running client is required.
+
+### 4. Database Synchronization
 
 **Direction:** Assembly64 Collection → SQLite Database
 
@@ -111,10 +128,10 @@ type|name|path|count
 
 | Field | Type | Description |
 |-------|------|-------------|
-| type | char | `f`=folder, `b`=browse, `l`=list |
-| name | string | Display name |
-| path | string | Navigation path |
-| count | int | Item count (optional) |
+| type | char | `f`=folder, `l`=list, `D`=MYFILES directory, `F`=MYFILES file, `b`=legacy browse (unused by current server) |
+| name | string | Display name. Single character (A..Z, `#`) inside a letter-grid menu, rendered as a grid cell. |
+| path | string | Navigation path. Paths ending in `/A-Z` open the letter grid. |
+| count | int | Item count (for display only) |
 
 ### Entry Item (LISTPATH/SEARCH response)
 
@@ -147,18 +164,15 @@ Multiple lines with field-value pairs:
 
 ## Memory Constraints
 
-**Server enforces C64 limits:**
+**Server limits:**
 
-```go
-const MAX_ITEMS = 20  // Maximum items per response
-```
-
-All `LISTPATH`, `SEARCH`, `RELEASES` commands are capped at 20 items to prevent C64 buffer overflow.
+- `LISTPATH`, `SEARCH`, `RELEASES`: 20 items per page, regardless of request.
+- `MENU`: up to 27 items (only for the A-Z letter grid). All other menus are much smaller.
 
 **Client buffers:**
 
 ```c
-#define MAX_ITEMS 20
+#define MAX_ITEMS 32          // 27 letter grid cells + headroom
 #define LINE_BUFFER_SIZE 128
 
 char item_names[MAX_ITEMS][32];
@@ -235,11 +249,14 @@ Environment:
 
 ### Client Side
 
-Compile-time configuration in `main.c`:
+Compile-time defaults in `main.c`:
 ```c
-#define SERVER_HOST "192.168.1.100"
+#define DEFAULT_SERVER_HOST "192.168.2.66"
 #define SERVER_PORT 6465
+#define SETTINGS_FILE "/Usb1/a64browser.cfg"
 ```
+
+The server host is overridable at runtime via the in-app Settings screen (press `C` on the splash/connect screen); the value is persisted to the Ultimate's filesystem.
 
 ## Deployment Topology
 

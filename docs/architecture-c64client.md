@@ -69,43 +69,47 @@ c64client/
 
 **Critical Constants (main.c):**
 ```c
-#define MAX_ITEMS 20         // Items per screen page
+#define MAX_ITEMS 32         // Items per menu buffer (must fit the 27-cell A-Z letter grid)
 #define LINE_BUFFER_SIZE 128 // TCP line buffer
-#define MAX_PATH_DEPTH 8     // Navigation stack depth
 ```
 
-**Per-item Memory:**
-- `item_names[20][32]` = 640 bytes
-- `menu_paths[20][48]` = 960 bytes
-- `item_cats[20][8]` = 160 bytes
-- Total per-screen: ~2KB
+**Per-item Memory** (per `MAX_ITEMS`=32):
+- `item_names[32][32]` = 1024 bytes
+- `menu_paths[32][48]` = 1536 bytes
+- `item_cats[32][8]`  = 256 bytes
+- Total per-screen: ~3KB
 
 **Total usable RAM:** ~38KB (C64 has 64KB, minus OS, screen, etc.)
+
+Lists themselves are still paginated at 20 entries per server page; MAX_ITEMS=32 exists so the A-Z letter grid (27 cells) fits in the same buffers.
 
 ## Key Components
 
 ### Main Application (main.c)
 
-**State Management:**
+**Page State (current_page):**
 ```c
-enum AppState {
-    STATE_MAIN_MENU,
-    STATE_BROWSE_MENU,
-    STATE_BROWSE_LIST,
-    STATE_SEARCH_RESULTS,
-    STATE_RELEASES,
-    STATE_INFO,
-    STATE_SETTINGS
-};
+#define PAGE_CATS        0   // Category / source / letter-grid menu
+#define PAGE_LIST        1   // Entry list (LISTPATH result)
+#define PAGE_SEARCH      2   // Simple text search
+#define PAGE_SETTINGS    3   // Server IP configuration
+#define PAGE_ADV_SEARCH  4   // Advanced search form
+#define PAGE_ADV_RESULTS 5   // Advanced search results
+#define PAGE_INFO        6   // Entry info screen
+#define PAGE_RELEASES    7   // Releases of a title
 ```
 
-**Navigation Stack:**
-```c
-static char menu_stack[MAX_PATH_DEPTH][48];
-static int menu_depth = 0;
+**Back-navigation via path trimming:**
 
-void push_path(const char *path);
-const char *pop_path(void);
+There is no navigation stack. The current menu path (`menu_path`) IS the history — going back trims the last `/`-separated component and reloads that parent menu. This removes a whole class of "stack-and-path-out-of-sync" bugs and keeps per-frame RAM use tiny.
+
+```c
+static char menu_path[64];        // e.g. "Games/CSDB/A-Z"
+static char current_category[48]; // list path, e.g. "Games/CSDB/A-Z/A"
+
+static void trim_path(char *path);  // "Games/CSDB" -> "Games", "Games" -> ""
+
+void go_back(void);  // reloads menu_path (or trims first if we're on a menu)
 ```
 
 **Screen Areas:**
@@ -194,25 +198,48 @@ while (uci_tcp_nextline(socket, buffer) > 0) {
 
 ### Navigation Keys
 
-| Key | Action |
-|-----|--------|
-| W/S | Cursor up/down |
-| N/P | Next/previous page |
-| Enter | Select/Run |
-| Del | Go back |
-| I | Show info |
-| > | View releases |
-| Q | Quit |
+| Key | Action (list / menu) | Action (letter grid) |
+|-----|----------------------|-----------------------|
+| W / cursor up | Row up | Grid up (-9 cells) |
+| S / cursor down | Row down | Grid down (+9 cells) |
+| cursor right (no shift) | Enter folder / open releases | Grid right (+1) |
+| cursor left (shift+right) | Back (in menus/lists) | Grid left (-1); wall-bump back at column 0 |
+| A / D (grid only) | - | Grid left / right |
+| Enter | Select / Run / drill | Enter the selected letter's list |
+| N / P | Next / previous page (list only) | - |
+| I | Show info (list only) | - |
+| / | Advanced search (root only) | - |
+| C | Settings (root only) | - |
+| DEL | Back | Back |
+| Q | Quit (root only) | - |
+
+### Letter Grid Mode
+
+When a menu's path ends in `/A-Z`, it renders as a 3-row × 9-column grid of letter cells instead of a vertical list. Cursor moves repaint only the outgoing and incoming cells (via `draw_letter_cell`) — no full-screen redraw. The grid is always 27 cells (A..Z plus `#`) regardless of how many letters actually have entries.
+
+### Keyboard Auto-Repeat
+
+Oscar64's `keyb_poll()` is edge-triggered: `keyb_key` reports a new press but then returns zero on every subsequent poll while the key is held. Auto-repeat is implemented on top of this by consulting `keyb_matrix[]` (level state) via `key_pressed(last_key_scan)` after every poll. The jiffy clock byte at `$A2` drives timing: 16 jiffies (~0.32s) initial delay, then 4 jiffies (~80ms, ~12 Hz) between repeats. Tuned to feel responsive without overshooting target rows.
+
+### Debug Hooks
+
+Two reserved KERNAL scratch bytes let an external uploader tool (`c64uploader debug ...`) drive the client over the C64 Ultimate HTTP API:
+
+| Address | Name | Purpose |
+|---------|------|---------|
+| `$02A7` | `DEBUG_KEY_INJECT` | Non-zero value is consumed by `get_key()`/`wait_key()` as a single-shot key press, then cleared. Used for `debug press` sequences. |
+| `$02A8` | `DEBUG_HOLD_SCAN` | Non-zero scancode (low 6 bits + bit 6 = shift) simulates a matrix-level held key, bypassing `keyb_poll`. Used for `debug hold` and `debug scroll-rate` to exercise auto-repeat timing deterministically. |
+
+Both are zero in normal operation and do not interfere with physical keyboard input.
 
 ### Visual Indicators
 
 | Indicator | Meaning |
 |-----------|---------|
-| `>` (green) | Multiple releases available |
+| `>` (white) | Cursor / selected item |
+| ` >` suffix on entry name | Multiple releases available for this title |
 | `+N` (green) | Trainer count |
-| `[f]` | Folder item |
-| `[b]` | Browse item |
-| `[l]` | List item |
+| `&D` | Documentation available |
 
 ## Data Flow
 
@@ -299,8 +326,8 @@ make run  # Launches x64sc with built PRG
 
 ## Known Limitations
 
-1. **Memory:** 20 items per screen maximum
-2. **Line length:** 128 bytes max per protocol line
-3. **Path depth:** 8 levels maximum navigation
-4. **Network:** Requires Ultimate II+ or Ultimate 64
-5. **Display:** 40 columns x 25 rows (standard C64)
+1. **Memory:** 32 items per menu buffer (27 A-Z grid cells + room to spare); 20 entries per server-paginated list page
+2. **Line length:** 128 bytes max per protocol line (enforced on receive via `uci_tcp_nextline(..., maxlen)`)
+3. **Network:** Requires Ultimate II+ or Ultimate 64
+4. **Display:** 40 columns x 25 rows (standard C64)
+5. **Path depth:** soft-limited by `menu_path[64]` (any path ≥60 chars is truncated)

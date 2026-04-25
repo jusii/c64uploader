@@ -68,56 +68,77 @@ The `ultimate.h/c` library provides access to Ultimate II+ Command Interface:
 
 ## Usage Guide
 
-### Main Menu
+### Startup and Connect
 
-On startup, the client connects to the server and displays the main menu with these options:
+On launch you see a splash screen that reports Ultimate detection, the configured server IP, and the C64's IP address:
+
+```
+C=CONFIG, ANY OTHER KEY=CONNECT
+```
+
+- Press **C** to open Settings and edit the server IP (saved to `/Usb1/a64browser.cfg`)
+- Press any other key to connect
+
+### Category Tree
+
+Once connected, you land on the root category list (`ASSEMBLY64 - CATEGORIES`). Navigation in menus:
 
 | Key | Action |
 |-----|--------|
-| **1** | Browse Top 200 Games |
-| **2** | Search Games (simple text search) |
-| **3** | Browse Categories (Games, Demos, Music) |
-| **4** | Advanced Search (filtered search with multiple criteria) |
-| **Q** | Quit |
+| **W / cursor up** | Move cursor up |
+| **S / cursor down** | Move cursor down |
+| **Enter / cursor right** | Enter category or folder |
+| **DEL / cursor left** | Back to parent menu |
+| **/** | Open advanced search |
+| **C** | Settings |
+| **Q** | Quit (root only) |
 
-### Navigation Keys
+The tree is: **Category → Source → [Browse A-Z, Top 200, Top 500, ...]**, e.g. `Games → CSDB → Browse A-Z`.
 
-These keys work throughout the application:
+### A-Z Letter Grid
+
+Selecting **Browse A-Z** opens a 27-cell grid (A..Z plus `#` for non-letter titles):
+
+```
+> A   B   C   D   E   F   G   H   I
+  J   K   L   M   N   O   P   Q   R
+  S   T   U   V   W   X   Y   Z   #
+```
 
 | Key | Action |
 |-----|--------|
-| **W** | Move cursor up |
-| **S** | Move cursor down |
-| **N** | Next page |
-| **P** | Previous page |
-| **Enter** | Select / Run entry |
-| **Del** | Go back |
-| **I** | Show info for selected entry |
+| **W / cursor up** | Move up one grid row (-9 cells) |
+| **S / cursor down** | Move down one grid row (+9 cells) |
+| **cursor right / D** | Move right within the row |
+| **cursor left / A** | Move left within the row; on column 0 (A, J, S) wall-bumps back to the source menu |
+| **Enter** | Enter the selected letter's entry list |
+| **DEL** | Back to source menu |
 
-### Browsing Lists
+### Browsing Entry Lists
 
-When browsing Top 200, search results, or category listings:
-- Use **W/S** to move the cursor up and down
-- Use **N/P** to page through results (20 items per page)
-- Press **Enter** to run the selected game/demo/music
-- Press **I** to view detailed information about the entry
+When viewing a list of entries (from a letter, a Top 200, a search result, etc.):
 
-**Category browsing** (option 3) groups entries by title:
-- Entries with multiple releases show a **>** indicator
-- Press **>** to see all releases of that title
-- Trainer count is shown as **+N** in green
+| Key | Action |
+|-----|--------|
+| **W/S or cursor keys** | Move cursor; auto-pages at top/bottom |
+| **N / P** | Next / previous page (20 per page) |
+| **Enter** | Run entry (or open Releases if multiple versions exist) |
+| **cursor right** | Open Releases for a grouped entry |
+| **I** | Show info (title, group, year, type, top200, rating) |
+| **DEL / cursor left** | Back to parent menu |
+
+Entries display additional indicators:
+
+| Indicator | Meaning |
+|-----------|---------|
+| **>** (green) | Multiple releases — press cursor-right to view them |
+| **+N** (green) | Trainer count |
+| **&D** | Documentation available |
 
 ### Search
 
-**Simple Search (option 2):**
-- Type your search query and press Enter
-- Searches both title and group/publisher names
-- Results show: `Name | Group | Year | Type`
-
-**Advanced Search (option 4):**
-- Filter by multiple criteria using key=value pairs
-- Available filters: category, title, group, file type, Top200 status
-- Results are grouped by title - entries with multiple releases show a `>` indicator
+- **`/` from root** opens **Advanced Search** with filters for category, source, title, group, and type. Use **W/S** to move between fields, **Space** to toggle/cycle option fields, **Enter** to edit a text field or trigger the search when on `.SEARCH.`.
+- Simple search (typing directly in a list page) searches the current view's scope.
 
 ### Grouped Entry Indicators
 
@@ -175,11 +196,25 @@ See [`../uploader/C64PROTOCOL.md`](../uploader/C64PROTOCOL.md) for details.
 
 ## Configuration
 
-Edit `main.c` to set your server IP:
+Default server host is set in `main.c`:
 ```c
-#define SERVER_HOST "192.168.1.100"
-#define SERVER_PORT 6400
+#define DEFAULT_SERVER_HOST "192.168.2.66"
+#define SERVER_PORT 6465
+#define SETTINGS_FILE "/Usb1/a64browser.cfg"
 ```
+
+Users typically change the server IP at runtime via the Settings screen (press **C** on the splash screen) rather than by recompiling. The setting is persisted to the Ultimate's filesystem and reloaded on next launch.
+
+## Debug Hooks
+
+The client reserves two KERNAL scratch bytes for remote driving via the Ultimate's HTTP API (see `c64uploader debug` in the top-level README):
+
+| Address | Name | Purpose |
+|---------|------|---------|
+| `$02A7` | `DEBUG_KEY_INJECT` | Single-shot key press consumed by `get_key()` / `wait_key()` |
+| `$02A8` | `DEBUG_HOLD_SCAN` | Simulated matrix-level held key (bypasses `keyb_poll()`) |
+
+Both bytes are zero in normal operation. They let a PC tool peek the text screen, inject keys, and measure auto-repeat timing without physical access to the keyboard.
 
 ## Credits
 

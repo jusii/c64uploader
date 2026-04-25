@@ -1,6 +1,6 @@
 # C64 Protocol Specification
 
-**Current version**: 2.0
+**Current version**: 2.1
 
 ## Overview
 
@@ -21,8 +21,8 @@ The protocol uses TCP connections with plain text commands and responses, making
 - **Text-based**: All data is transmitted as ASCII text
 - **Stateless**: Each command is independent
 - **Connection timeout**: 5 minutes of inactivity
-- **Item limit**: Server never sends more than 20 items per response (C64 memory constraint)
-- **Response terminator**: All multi-line responses end with `.\n`
+- **Item limit**: Server sends at most 20 items per paginated response (LIST/LISTPATH/RELEASES/SEARCH). The MENU response can include up to 27 items (the A-Z letter grid); the client buffers up to 32 (MAX_ITEMS).
+- **Response terminator**: All multi-line responses end with `.\n`. An empty or invalid MENU returns `OK 0\n.\n` — never a bare `.\n`, which would stall a client waiting for the `OK` header.
 
 ## Command Format
 
@@ -76,11 +76,13 @@ OK <count>\n
 .\n
 ```
 
-- `count`: Number of items returned (max 20)
+- `count`: Number of items returned (up to 27 for the A-Z letter grid; otherwise at most 20)
 - `type`: Item type code:
   - `f` = folder (navigate deeper with MENU)
-  - `b` = browse (use LETTERS command for letter picker)
   - `l` = list (use LISTPATH to get entries)
+  - `D` = directory inside MYFILES (navigate deeper with MENU)
+  - `F` = file inside MYFILES (execute with RUNFILE)
+  - `b` = browse (legacy — older servers emitted this for "Browse A-Z". Current clients still accept it as a LIST, but the server no longer produces `b`. `Browse A-Z` is now a folder.)
 - `name`: Display name for the item
 - `path`: Full path for this item (used in subsequent commands)
 - `count`: Number of entries (for display purposes)
@@ -96,13 +98,14 @@ MENU
 
 Response:
 ```
-OK 6
+OK 7
 f|Games|Games|25000
 f|Demos|Demos|15000
 f|Music|Music|50000
 f|Intros|Intros|3000
 f|Graphics|Graphics|1500
 f|Discmags|Discmags|500
+f|My Files|MYFILES|0
 .
 ```
 
@@ -116,17 +119,41 @@ MENU Games/CSDB
 Response:
 ```
 OK 3
-b|Browse A-Z|Games/CSDB|8500
+f|Browse A-Z|Games/CSDB/A-Z|8500
 l|Top 200|Games/CSDB/Top200|200
-l|By Year|Games/CSDB/ByYear|8500
+l|4K Competition|Games/CSDB/4k|450
 .
 ```
 
+Note the `/A-Z` suffix on the Browse A-Z path: it marks the folder that opens the letter grid (see Example 3).
+
+**Example 3: A-Z letter grid**
+
+Any MENU path whose last segment is `A-Z` returns a 27-entry grid menu (A..Z + `#` for non-alphabetic). Each entry is a LIST at `<path>/<letter>`.
+
+Request:
+```
+MENU Games/CSDB/A-Z
+```
+
+Response:
+```
+OK 27
+l|A|Games/CSDB/A-Z/A|523
+l|B|Games/CSDB/A-Z/B|412
+...
+l|Z|Games/CSDB/A-Z/Z|23
+l|#|Games/CSDB/A-Z/#|42
+.
+```
+
+Counts are 0 for letters with no entries; all 27 slots are always returned so clients can lay out a fixed 3x9 grid.
+
 ---
 
-### 2. LETTERS - Get Letter Counts for Browse
+### 2. LETTERS - Get Letter Counts for Browse (legacy)
 
-The `LETTERS` command returns available first letters and their entry counts for the letter picker UI. Used when the client selects a type `b` (browse) item.
+The `LETTERS` command returns available first letters and their entry counts for the letter picker UI. The current client no longer uses this — the A-Z letter grid is delivered via the MENU command at a `/A-Z` path (see MENU Example 3). The server still implements `LETTERS` for older clients.
 
 #### Syntax
 ```
@@ -184,8 +211,10 @@ LISTPATH <offset> <count> <path> [letter]
 #### Arguments
 - `offset`: Starting index, 0-based
 - `count`: Number of entries to return (max 20)
-- `path`: Path to list entries from
-- `letter`: (Optional) Filter to entries starting with this letter (A-Z or # for non-alpha)
+- `path`: Path to list entries from. Two forms are accepted:
+  - `Category/Source/<letter>` — legacy letter filter at the source level
+  - `Category/Source/A-Z/<letter>` — new A-Z grid leaf, same filtering behavior
+- `letter`: (Optional) Filter to entries starting with this letter (A-Z or # for non-alpha). Redundant when the path already includes a letter via either form above.
 
 #### Response Format
 ```
@@ -347,11 +376,15 @@ OK\n
 NAME|<name>\n
 GROUP|<group>\n
 YEAR|<year>\n
-CAT|<category>\n
 TYPE|<file_type>\n
-PATH|<relative_path>\n
+REL|<release_name>\n
+AUTHOR|<author>\n
+TOP200|#<rank>\n
+RATING|<rating>\n
 .\n
 ```
+
+All fields after NAME/GROUP/TYPE are optional — the server omits them when the underlying value is empty or NULL. Clients should read label-prefixed lines until `.\n` rather than expecting a fixed order or set.
 
 #### Example
 
@@ -366,9 +399,10 @@ OK
 NAME|Last Ninja
 GROUP|System 3
 YEAR|1987
-CAT|Games
 TYPE|d64
-PATH|Games/L/Last_Ninja.d64
+REL|Last Ninja +D
+TOP200|#85
+RATING|8.3
 .
 ```
 
@@ -476,19 +510,19 @@ Server closes connection after sending this response.
 
 The typical navigation flow for the C64 client:
 
-1. **Root Menu**: `MENU` -> displays categories (Games, Demos, Music, etc.)
+1. **Root Menu**: `MENU` -> displays categories (Games, Demos, Music, etc. + My Files)
 2. **Category Menu**: `MENU Games` -> displays sources (CSDB, Gamebase, etc.)
-3. **Source Menu**: `MENU Games/CSDB` -> displays navigation options
-4. **Letter Picker**: `LETTERS Games/CSDB` -> user selects a letter
-5. **Entry List**: `LISTPATH 0 20 Games/CSDB A` -> displays entries starting with 'A'
+3. **Source Menu**: `MENU Games/CSDB` -> displays navigation options; one of them is the `f|Browse A-Z|.../A-Z|N` folder
+4. **Letter Grid**: `MENU Games/CSDB/A-Z` -> returns 27 `l` entries the client renders as a 3x9 grid
+5. **Entry List**: `LISTPATH 0 20 Games/CSDB/A-Z/A` -> displays entries starting with 'A'
 6. **Releases**: `RELEASES 0 20 Games/CSDB "Arkanoid"` -> shows all versions
 7. **Run**: `RUN 12345` -> executes the selected entry
 
 ## Memory Constraints
 
-The C64 client has limited memory (MAX_ITEMS = 20). The server enforces this limit:
-- MENU responses: max 20 items
-- LETTERS responses: max 27 items (A-Z + #)
+The C64 client buffers up to 32 menu items (MAX_ITEMS = 32). Server response limits:
+- MENU responses: up to 27 items (the A-Z letter grid). All other menus return at most ~10 items in practice.
+- LETTERS responses (legacy): up to 27 items (A-Z + #)
 - LISTPATH/RELEASES/SEARCH responses: max 20 items per page
 
 Pagination is handled client-side using offset/count parameters.

@@ -12,9 +12,11 @@ The C64 Ultimate Uploader enables Commodore 64 users to browse and run programs 
 - **Large Collection Support**: Browse 100,000+ entries from Assembly64
 - **Multiple Content Types**: Games, Demos, Music (SID), Intros, Graphics, Discmags
 - **Full-Text Search**: Fast search across titles and groups
-- **Category Browsing**: Hierarchical navigation by source and letter
+- **Letter Grid Navigation**: A-Z + `#` 3x9 grid picker for entering long browse lists quickly
+- **My Files**: Personal directory for user-uploaded PRGs / D64s served over the same protocol
 - **Grouped Entries**: See all releases of the same title together
 - **Direct Execution**: One-click launch of any program
+- **Remote Debugging**: Drive the native client from the PC (`c64uploader debug`) via the Ultimate HTTP API for screen-peek + key-inject investigations
 
 ## System Requirements
 
@@ -63,10 +65,12 @@ The C64 Ultimate Uploader enables Commodore 64 users to browse and run programs 
 
 | Component | Description |
 |-----------|-------------|
-| Menu System | Hierarchical navigation |
+| Menu System | Hierarchical navigation via path trimming (no explicit nav stack) |
+| Letter Grid | 3x9 A-Z + `#` picker rendered in-place for Browse A-Z folders |
 | Search Interface | Simple and advanced search |
-| Entry Browser | List view with pagination |
+| Entry Browser | List view with pagination, auto-repeat scrolling |
 | Info Display | Entry details screen |
+| Debug Hooks | `$02A7` / `$02A8` scratch bytes let the PC tool drive the client over HTTP |
 
 ## Technology Stack
 
@@ -91,22 +95,15 @@ go build -o c64uploader
 ./c64uploader server -db /path/to/c64uploader.db -assembly64 /path/to/assembly64
 ```
 
-### 3. Configure Client
-Edit `c64client/src/main.c`:
-```c
-#define SERVER_HOST "192.168.1.100"
-#define SERVER_PORT 6465
-```
-
-### 4. Build and Deploy Client
+### 3. Build and Deploy Client
 ```bash
 cd c64client
 make prg
-U2P_HOST=192.168.1.50 make deploy
+U2P_HOST=192.168.1.50 make deploy   # or: ./c64uploader load build/a64browser.prg
 ```
 
-### 5. Run on C64
-Load and run `a64browser.prg` on your C64 with Ultimate II+.
+### 4. Run on C64 and Configure Server
+Load `a64browser.prg` on your C64 with Ultimate II+. On first boot it shows the default server IP and "C=CONFIG, ANY OTHER KEY=CONNECT". Press **C** to edit the server IP (saved to `/Usb1/a64browser.cfg`), or any other key to connect with the current setting.
 
 ## Content Sources
 

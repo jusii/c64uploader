@@ -8,15 +8,16 @@
 c64uploader/
 ├── uploader/                    # Go server application
 │   ├── main.go                  # CLI entry point, subcommand routing
-│   ├── apiclient.go             # Ultimate II+ REST API and FTP client
+│   ├── apiclient.go             # Ultimate II+ REST API (incl. readmem/writemem) and FTP client
 │   ├── server_sqlite.go         # TCP protocol server (main server logic)
 │   ├── index.go                 # Search index loading and management
 │   ├── db.go                    # SQLite schema and query definitions
 │   ├── tui.go                   # Bubbletea terminal UI
 │   ├── d64.go                   # D64/G64 disk image parser
-│   ├── dbgen.go                 # Database generation helpers
 │   ├── dbgen_sqlite.go          # SQLite database generator
-│   ├── testclient.go            # Test client for protocol debugging
+│   ├── debug.go                 # Remote debug subcommand (screen peek, key inject, scroll-rate, peek)
+│   ├── scanner.go               # Filesystem scanner used by dbgen
+│   ├── testclient.go            # Scratch TCP client for protocol debugging (`// +build ignore`)
 │   ├── go.mod                   # Go module definition
 │   ├── go.sum                   # Dependency checksums
 │   └── C64PROTOCOL.md           # Protocol specification
@@ -60,14 +61,15 @@ c64uploader/
 
 | File | Purpose | Key Functions |
 |------|---------|---------------|
-| main.go | CLI routing | `main()`, subcommand handlers |
-| server_sqlite.go | Protocol server | `handleConnection()`, command handlers |
-| apiclient.go | Ultimate API | `RunPrg()`, `RunD64()`, FTP functions |
+| main.go | CLI routing | `main()`, `run{TUI,Load,FTP,Poke,Server,SQLiteGen,Debug}` |
+| server_sqlite.go | Protocol server | `handleC64ConnectionSQLite`, `HandleMenu`, `HandleListPath`, `getLetterGridMenu` |
+| apiclient.go | Ultimate API | `runPRG`, `runCRT`, `runDiskImage`, `WriteMemory`, `ReadMemory`, `MenuButton`, `Reboot` |
 | db.go | Database layer | Schema, `OpenDB()`, queries |
 | tui.go | Terminal UI | Bubbletea model, views |
 | index.go | Index loading | `LoadIndex()`, search |
 | d64.go | Disk parsing | `ReadD64()`, PRG extraction |
-| dbgen_sqlite.go | DB generation | `GenerateSQLite()` |
+| dbgen_sqlite.go | DB generation | `GenerateSQLiteDB` |
+| debug.go | Remote debug | `runDebug`, `injectKey`, `measureScrollRate`, `hexDump`, screen-code decoding |
 
 ### c64client/src/ (C64 Native)
 
@@ -97,12 +99,13 @@ c64uploader/
 ./c64uploader <command> [flags]
 
 # Commands
-./c64uploader tui                    # Terminal UI (default)
-./c64uploader server                 # TCP protocol server
-./c64uploader load <id>              # Run entry by ID
-./c64uploader ftp <file>             # Upload via FTP
-./c64uploader poke <file>            # Upload and execute
-./c64uploader sqlitegen              # Generate database
+./c64uploader tui                            # Terminal UI
+./c64uploader server                         # TCP protocol server
+./c64uploader load <file|url>                # Upload and run a file
+./c64uploader ftp <file|url> <dest>          # Upload via FTP
+./c64uploader poke <address>,<value>         # Write a byte via DMA
+./c64uploader sqlitegen -assembly64 <path>   # Generate database
+./c64uploader debug <sub>                    # Remote debug (screen/press/hold/scroll-rate/peek/reset/reboot/menu/info)
 ```
 
 ### C64 Client

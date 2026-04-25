@@ -31,10 +31,10 @@
 
 ### Go Server (uploader)
 
-- **Tech Stack:** Go 1.25, Bubbletea, Lipgloss, modernc.org/sqlite
+- **Tech Stack:** Go 1.26, Bubbletea, Lipgloss, modernc.org/sqlite
 - **Entry Point:** `uploader/main.go`
-- **Commands:** `tui`, `server`, `load`, `ftp`, `poke`, `sqlitegen`
-- **Architecture:** CLI with subcommands + TCP protocol server
+- **Commands:** `tui`, `server`, `load`, `ftp`, `poke`, `sqlitegen`, `debug`
+- **Architecture:** CLI with subcommands + TCP protocol server + HTTP-driven remote debug channel
 
 ### C64 Client (c64client)
 
@@ -138,16 +138,18 @@ make run
 | Go Server | Ultimate II+ | REST API | File execution |
 | Go Server | Assembly64 | File system | Content access |
 | C64 Client | Ultimate II+ | UCI registers | Network I/O |
+| Debug Tool (PC) | Ultimate II+ | HTTP (machine:readmem/writemem/reset) | Remote client driving ($02A7/$02A8 scratch bytes) |
 
 ---
 
 ## Key Constraints
 
 - **Memory:** C64 has ~38KB usable RAM
-- **Items per page:** Maximum 20 (server-enforced)
+- **Items per paginated list page:** 20 (LISTPATH/SEARCH/RELEASES)
+- **Items per menu page:** up to 27 (A-Z letter grid); client buffers 32 max
 - **Line buffer:** 128 bytes maximum
-- **Navigation depth:** 8 levels maximum
 - **Display:** 40x25 characters
+- **Path length:** 64 bytes (menu_path) / 48 bytes (current_category, menu_paths[i])
 
 ---
 

@@ -291,7 +291,21 @@ make runcrt   # Execute cartridge via REST API
 - `-n` - Native code generation (faster)
 - `-O2` - Optimization level 2
 - `-tm=c64` - Target machine: Commodore 64
-- `-tf=crt16` - 16KB cartridge format
+- `-dNOFLOAT` - Drop oscar64's float-printf helpers (we never format floats; saves ~1.6 KB)
+- `-tf=crt16` - 16 KB autostart cartridge image (cart build only)
+
+### Cart-target constraints
+
+The CRT16 build runs as a 16 KB autostart cartridge mapped at `$8000-$BFFF`. Two oscar64 cart-runtime details govern how the source is written:
+
+1. **No data segment copy.** Oscar64's CRT8/CRT16 startup clears BSS but does not copy the data section from cart ROM to RAM. Any `static <type> x = <value>;` ends up at an address inside `$8000-$BFFF` and is read-only. **All globals/statics in `main.c` and `ultimate.c` are declared without initializers** so they land in BSS (zero-cleared on boot); the four genuinely non-zero defaults are assigned at runtime by `init_state()` at the top of `main()`:
+   - `server_host` ← `DEFAULT_SERVER_HOST` via `strcpy`
+   - `search_in_box` ← `true`
+   - `releases_return_page` ← `PAGE_LIST`
+   - `last_key_scan` ← `0xFF`
+2. **No KERNAL VIC init.** The KERNAL is bypassed on cart boot, so `main()` writes `$DD00`, `$D018`, `$D016`, `$D011` to put the VIC chip into a known good text-mode state (display on, screen at `$0400`, charset at `$1000`). Without this the C64 video output can stay black even though screen RAM is correct.
+
+The .prg variant uses the regular C64 boot path where the KERNAL initializes both the data segment and the VIC; the same source code runs identically in both.
 
 ## Configuration
 

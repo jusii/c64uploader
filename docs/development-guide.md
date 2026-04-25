@@ -116,7 +116,7 @@ cd c64client
 # Build PRG (default)
 make prg
 
-# Build cartridge (16KB auto-start)
+# Build 16 KB autostart cartridge image (functionally identical to the .prg)
 make crt
 
 # Build disk image (requires c1541)
@@ -125,6 +125,8 @@ make d64
 # Clean build artifacts
 make clean
 ```
+
+Both `prg` and `crt` are produced from the same source. `make crt` adds `-tf=crt16` to package the binary as a 16 KB cartridge image; `-dNOFLOAT` is on by default in the Makefile to keep the binary inside the 16 KB cart slot. See [docs/architecture-c64client.md](architecture-c64client.md#cart-target-constraints) for the cart-specific source conventions (no static initializers, explicit VIC init).
 
 ## Running
 

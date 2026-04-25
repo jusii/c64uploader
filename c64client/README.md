@@ -11,26 +11,63 @@ Native C64 client for browsing the Assembly64 database via Ultimate II+ network 
 ## Building
 
 ```bash
-# Build PRG file
+# Build PRG file (recommended for FTP/load workflow)
 make prg
 
-# Build CRT cartridge
+# Build 16 KB CRT cartridge image (autostart)
 make crt
 
 # Build D64 disk image (requires VICE c1541)
 make d64
 ```
 
+Both `prg` and `crt` are produced from the same source; `make crt` adds
+`-tf=crt16` to package the binary as a 16 KB autostart cartridge image.
+`-dNOFLOAT` is on by default (we never format floats, and dropping the
+oscar64 float-printf helpers saves ~1.6 KB so the image fits the 16 KB
+cart slot).
+
+### Notes on the cart variant
+
+- The cart contains exactly the same browser as the .prg. There is no
+  feature gap.
+- Cart targets bypass the C64 KERNAL boot path; the program therefore
+  initializes the VIC chip (display on, text mode, default screen
+  pointers) and runs `init_state()` to set the few non-zero defaults
+  at runtime. Static variables with explicit initializers cannot be
+  used in cart builds because oscar64's CRT16 runtime keeps the data
+  section in cart ROM (read-only); see [c64client/src/main.c](src/main.c)
+  for the pattern.
+- 16 KB is a hard limit on the cart slot — keep an eye on the .prg
+  size (it tracks .crt-content size) when adding code.
+
 ## Running
 
 ### In VICE emulator
+
 ```bash
-make run
+make run                # launches x64sc with the .prg
 ```
 
-### On real hardware
-1. Copy `build/a64browser.prg` to your Ultimate II+ USB drive
-2. Or use FTP: `U2P_HOST=192.168.1.x make deploy`
+### On real hardware — three options
+
+```bash
+# 1. Upload the .prg to the Ultimate's filesystem and load it from BASIC
+U2P_HOST=192.168.1.x make deploy
+
+# 2. Run the .prg directly via the Ultimate REST API (one-shot)
+U2P_HOST=192.168.1.x make runprg
+
+# 3. Run the .crt as a cartridge via the Ultimate REST API
+U2P_HOST=192.168.1.x make runcrt
+
+# Equivalent to #3 using the c64uploader CLI
+./c64uploader load -host <ultimate-ip> build/a64browser.crt
+```
+
+The cartridge form factor is what you want if you ever flash an
+EasyFlash / KFF / similar — the C64 boots straight into the browser
+on power-on with no PC involvement.
 
 ## Project Structure
 

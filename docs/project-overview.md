@@ -16,6 +16,7 @@ The C64 Ultimate Uploader enables Commodore 64 users to browse and run programs 
 - **My Files**: Personal directory for user-uploaded PRGs / D64s served over the same protocol
 - **Grouped Entries**: See all releases of the same title together
 - **Direct Execution**: One-click launch of any program
+- **Cartridge Build**: Same source produces a 16 KB autostart `.crt` so the C64 can boot straight into the browser via the Ultimate's cartridge slot (or a flashed EasyFlash) — no PC-side launch step.
 - **Remote Debugging**: Drive the native client from the PC (`c64uploader debug`) via the Ultimate HTTP API for screen-peek + key-inject investigations
 
 ## System Requirements
@@ -28,7 +29,7 @@ The C64 Ultimate Uploader enables Commodore 64 users to browse and run programs 
 ### Client Side
 - Commodore 64 with Ultimate II+ or Ultimate 64
 - Network connectivity
-- a64browser.prg (client application)
+- `a64browser.prg` (loadable at runtime) **or** `a64browser.crt` (autostart cartridge)
 
 ## Architecture
 

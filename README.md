@@ -246,17 +246,21 @@ The `a64browser` is a native C64 application located in the `c64client/` directo
 
 ### Running a64browser on C64
 
-1. Upload the C64 client to your C64 Ultimate
+1. Build the client (see [c64client/README.md](c64client/README.md)):
    ```bash
-   ./c64uploader ftp -host <ultimate-ip> build/a64browser.crt
+   cd c64client && make prg crt
+   # produces build/a64browser.prg and build/a64browser.crt
    ```
 
-2. Start the server on your PC
+2. Start the protocol server on your PC:
    ```bash
    ./c64uploader server -host <ultimate-ip> -assembly64 <path>
    ```
 
-3. Run the program on your C64
+3. Launch the browser on your C64 Ultimate. Three ways:
+   - **PRG + load**: `./c64uploader load -host <ultimate-ip> build/a64browser.prg` — uploads and runs in one shot.
+   - **CRT cartridge**: `./c64uploader load -host <ultimate-ip> build/a64browser.crt` — same flow but the Ultimate runs it as a 16 KB autostart cartridge. Useful for fast cold-boot and the option to flash a real EasyFlash so the C64 powers up directly into the browser.
+   - **FTP + manual launch**: copy the .prg to the Ultimate's filesystem and load it from BASIC.
 
 4. On startup:
    - Press **C** to configure server IP (saved to `/Usb1/a64browser.cfg`)

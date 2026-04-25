@@ -50,9 +50,14 @@ static int  offset = 0;
 static int  current_page = PAGE_CATS;
 
 // Current category or search query
-static char current_category[32];
+static char current_category[48];  // Path for LISTPATH/RELEASES
 static char search_query[32];
 static int  search_query_len = 0;
+
+// Menu navigation state
+static char menu_path[64];              // Current path like "Games/CSDB/All"
+static char menu_paths[MAX_ITEMS][48];  // Path for each menu item
+static char menu_types[MAX_ITEMS];      // 'f'=folder, 'l'=list
 
 // Search category filter: 0=All, 1=Games, 2=Demos, 3=Music
 static int  search_category = 0;
@@ -134,8 +139,9 @@ static int  item_trainers[MAX_ITEMS];  // Trainer count per entry (-1=unknown, 0
 
 // Releases page state
 static char releases_title[32];        // Title being viewed
-static char releases_category[8];      // Category of releases
+static char releases_category[48];     // Path or category of releases
 static int  releases_return_page = PAGE_ADV_RESULTS;  // Where to return (PAGE_LIST or PAGE_ADV_RESULTS)
+static int  releases_return_offset = 0;  // Offset to restore when returning
 
 // VIC chip at $D000
 #define vic (*(struct VIC *)0xd000)
@@ -298,6 +304,9 @@ void disconnect_from_server(void)
 // Protocol
 //-----------------------------------------------------------------------------
 
+// Forward declarations
+void load_list_path(const char *path, int start);
+
 void send_command(const char *cmd)
 {
     if (!connected)
@@ -321,42 +330,153 @@ int parse_ok_count(void)
 }
 
 // Load categories from server
-void load_categories(void)
+void load_menu(const char *path)
 {
-    print_status("loading categories...");
+    print_status("loading...");
 
-    send_command("CATS");
+    // Build MENU command
+    char cmd[80];
+    if (path[0])
+        sprintf(cmd, "MENU %s", path);
+    else
+        strcpy(cmd, "MENU");
+
+    send_command(cmd);
     read_line();  // "OK n"
 
     item_count = 0;
     total_count = parse_ok_count();
 
-    // Read category lines until "."
+    // Read menu lines until "."
+    // Format: type|name|path|count
     while (item_count < MAX_ITEMS)
     {
         read_line();
         if (line_buffer[0] == '.')
             break;
 
-        // Parse "Category|count"
-        char *p = strchr(line_buffer, '|');
-        if (p)
-        {
-            *p = 0;  // Terminate at |
-            strncpy(item_names[item_count], line_buffer, 31);
-            item_names[item_count][31] = 0;
-            item_ids[item_count] = atoi(p + 1);  // Store count as "id"
-            item_count++;
-        }
+        // Parse "type|name|path|count"
+        char *type = line_buffer;
+        char *name = strchr(type, '|');
+        if (!name) continue;
+        *name++ = 0;
+
+        char *mpath = strchr(name, '|');
+        if (!mpath) continue;
+        *mpath++ = 0;
+
+        char *count = strchr(mpath, '|');
+        if (!count) continue;
+        *count++ = 0;
+
+        strncpy(item_names[item_count], name, 31);
+        item_names[item_count][31] = 0;
+        strncpy(menu_paths[item_count], mpath, 47);
+        menu_paths[item_count][47] = 0;
+        menu_types[item_count] = type[0];  // 'f' or 'l'
+        item_ids[item_count] = atol(count);  // Store count
+        item_count++;
     }
+
+    // If menu returned 0 items but we have a path, treat it as a list path
+    // This handles terminal list paths like Games/CSDB/All/B
+    if (item_count == 0 && path[0])
+    {
+        // Go back one level since this path is a list, not a menu
+        char parent[64];
+        strncpy(parent, path, 63);
+        parent[63] = 0;
+        char *last = strrchr(parent, '/');
+        if (last)
+            *last = 0;
+        else
+            parent[0] = 0;
+
+        strncpy(menu_path, parent, 63);
+        menu_path[63] = 0;
+
+        // Load as list instead
+        strcpy(current_category, path);
+        load_list_path(path, 0);
+        current_page = PAGE_LIST;
+        return;
+    }
+
+    // Save current path
+    strncpy(menu_path, path, 63);
+    menu_path[63] = 0;
 
     cursor = 0;
     offset = 0;
-    current_page = 0;
+    current_page = PAGE_CATS;
     print_status("ready");
 }
 
-// Load entries for a category (grouped by title)
+// Legacy function - calls load_menu with empty path
+void load_categories(void)
+{
+    load_menu("");
+}
+
+// Load entries by path using LISTPATH command
+void load_list_path(const char *path, int start)
+{
+    print_status("loading...");
+
+    char cmd[96];
+    sprintf(cmd, "LISTPATH %d 20 %s", start, path);
+    send_command(cmd);
+    read_line();  // "OK n total"
+
+    // Parse "OK n total"
+    char *p = line_buffer + 3;
+    int n = atoi(p);
+    p = strchr(p, ' ');
+    if (p)
+        total_count = atol(p + 1);
+
+    item_count = 0;
+    offset = start;
+
+    // Read entry lines until "."
+    // Format: ID|Name|Category|Count|Trainers (grouped by title)
+    while (item_count < MAX_ITEMS && item_count < n)
+    {
+        read_line();
+        if (line_buffer[0] == '.')
+            break;
+
+        char *id_str = line_buffer;
+        char *name = strchr(id_str, '|');
+        if (!name) continue;
+        *name++ = 0;
+
+        char *cat = strchr(name, '|');
+        if (!cat) continue;
+        *cat++ = 0;
+
+        char *count = strchr(cat, '|');
+        if (!count) continue;
+        *count++ = 0;
+
+        char *trainers = strchr(count, '|');
+        if (trainers) *trainers++ = 0;
+
+        item_ids[item_count] = atol(id_str);
+        strncpy(item_names[item_count], name, 31);
+        item_names[item_count][31] = 0;
+        strncpy(item_cats[item_count], cat, 7);
+        item_cats[item_count][7] = 0;
+        item_counts[item_count] = atoi(count);  // Number of releases
+        item_trainers[item_count] = trainers ? atoi(trainers) : -1;
+        item_count++;
+    }
+
+    cursor = 0;
+    print_status("ready");
+}
+
+// Load entries for a category (grouped by title) - legacy
 void load_entries(const char *category, int start)
 {
     print_status("loading...");
@@ -666,11 +786,11 @@ void do_releases(const char *category, const char *title, int start)
 {
     print_status("loading releases...");
 
-    // Save title and category for display
+    // Save title and category/path for display
     strncpy(releases_title, title, 31);
     releases_title[31] = 0;
-    strncpy(releases_category, category, 7);
-    releases_category[7] = 0;
+    strncpy(releases_category, category, 47);
+    releases_category[47] = 0;
 
     // Build command: "RELEASES offset count category title"
     char cmd[96];
@@ -830,6 +950,7 @@ char get_key(void)
             if (k == KSCAN_S || k == KSCAN_CSR_DOWN) return 'd';
             if (k == KSCAN_SLASH) return '/';
             if (k == KSCAN_CSR_RIGHT && !shift) return '>';  // Right = enter category
+            if (k == KSCAN_CSR_RIGHT && shift) return 8;  // Left = back
         }
         // In list view
         else if (current_page == PAGE_LIST)
@@ -1381,6 +1502,9 @@ void draw_info(void)
 
 int main(void)
 {
+    // Initialize menu state
+    menu_path[0] = 0;
+
     // Set up screen
     vic.color_border = VCOL_BLACK;
     vic.color_back = VCOL_BLACK;
@@ -1638,10 +1762,10 @@ int main(void)
                         // At top of list, go to previous page
                         int new_offset = offset - 20;
                         if (new_offset < 0) new_offset = 0;
-                        load_entries(current_category, new_offset);
+                        load_list_path(current_category, new_offset);
                         cursor = item_count - 1;
                         if (cursor > LIST_HEIGHT - 1) cursor = LIST_HEIGHT - 1;
-                        draw_list(current_category);
+                        draw_list(menu_path);
                     }
                 }
                 else if (current_page == PAGE_SEARCH)
@@ -1736,9 +1860,9 @@ int main(void)
                     else if (offset + item_count < total_count)
                     {
                         // At bottom, go to next page
-                        load_entries(current_category, offset + 20);
+                        load_list_path(current_category, offset + 20);
                         cursor = 0;
-                        draw_list(current_category);
+                        draw_list(menu_path);
                     }
                 }
                 else if (current_page == PAGE_SEARCH)
@@ -1789,12 +1913,23 @@ int main(void)
                 }
                 break;
 
-            case '>':  // Right arrow - enter category or releases
-                if (current_page == PAGE_CATS)
+            case '>':  // Right arrow - enter menu item or releases
+                if (current_page == PAGE_CATS && item_count > 0)
                 {
-                    strcpy(current_category, item_names[cursor]);
-                    load_entries(current_category, 0);
-                    draw_list(current_category);
+                    if (menu_types[cursor] == 'f')
+                    {
+                        // Folder - navigate into it
+                        load_menu(menu_paths[cursor]);
+                        draw_list(item_names[0] ? menu_path : "assembly64");
+                    }
+                    else
+                    {
+                        // List - load entries
+                        strcpy(current_category, menu_paths[cursor]);
+                        load_list_path(menu_paths[cursor], 0);
+                        current_page = PAGE_LIST;
+                        draw_list(item_names[0] ? item_names[0] : menu_path);
+                    }
                 }
                 else if (current_page == PAGE_LIST && item_count > 0)
                 {
@@ -1803,9 +1938,10 @@ int main(void)
                     {
                         strncpy(releases_title, item_names[cursor], 31);
                         releases_title[31] = 0;
-                        strncpy(releases_category, current_category, 7);
-                        releases_category[7] = 0;
+                        strncpy(releases_category, current_category, 47);
+                        releases_category[47] = 0;
                         releases_return_page = PAGE_LIST;
+                        releases_return_offset = offset;  // Save current offset
                         do_releases(releases_category, releases_title, 0);
                         current_page = PAGE_RELEASES;
                         draw_releases();
@@ -1826,6 +1962,7 @@ int main(void)
                         strncpy(releases_category, item_cats[cursor], 7);
                         releases_category[7] = 0;
                         releases_return_page = PAGE_ADV_RESULTS;
+                        releases_return_offset = offset;  // Save current offset
                         do_releases(releases_category, releases_title, 0);
                         current_page = PAGE_RELEASES;
                         draw_releases();
@@ -1839,12 +1976,23 @@ int main(void)
                 break;
 
             case '\r':  // Enter
-                if (current_page == PAGE_CATS)
+                if (current_page == PAGE_CATS && item_count > 0)
                 {
-                    // Select category
-                    strcpy(current_category, item_names[cursor]);
-                    load_entries(current_category, 0);
-                    draw_list(current_category);
+                    // Select menu item
+                    if (menu_types[cursor] == 'f')
+                    {
+                        // Folder - navigate into it
+                        load_menu(menu_paths[cursor]);
+                        draw_list(menu_path[0] ? menu_path : "assembly64");
+                    }
+                    else
+                    {
+                        // List - load entries
+                        strcpy(current_category, menu_paths[cursor]);
+                        load_list_path(menu_paths[cursor], 0);
+                        current_page = PAGE_LIST;
+                        draw_list(menu_path);
+                    }
                 }
                 else if (current_page == PAGE_SETTINGS)
                 {
@@ -1974,8 +2122,24 @@ int main(void)
                 }
                 else if (current_page == PAGE_LIST)
                 {
-                    load_categories();
-                    draw_list("assembly64 - categories");
+                    // Go back to menu
+                    load_menu(menu_path);
+                    draw_list(menu_path[0] ? menu_path : "assembly64");
+                }
+                else if (current_page == PAGE_CATS)
+                {
+                    // Go up one level in menu
+                    if (menu_path[0])
+                    {
+                        // Find last / and truncate
+                        char *last = strrchr(menu_path, '/');
+                        if (last)
+                            *last = 0;
+                        else
+                            menu_path[0] = 0;  // Back to root
+                        load_menu(menu_path);
+                        draw_list(menu_path[0] ? menu_path : "assembly64");
+                    }
                 }
                 else if (current_page == PAGE_ADV_SEARCH)
                 {
@@ -2011,13 +2175,13 @@ int main(void)
                     // Go back to where we came from
                     if (releases_return_page == PAGE_LIST)
                     {
-                        load_entries(current_category, 0);  // Re-load grouped list
+                        load_list_path(current_category, releases_return_offset);  // Restore offset
                         current_page = PAGE_LIST;
-                        draw_list(current_category);
+                        draw_list(menu_path);
                     }
                     else
                     {
-                        do_adv_search(0);  // Re-run search to restore grouped results
+                        do_adv_search(releases_return_offset);  // Restore offset
                         current_page = PAGE_ADV_RESULTS;
                         draw_adv_results();
                     }
@@ -2027,8 +2191,8 @@ int main(void)
             case 'n':  // Next page
                 if (current_page == PAGE_LIST && offset + item_count < total_count)
                 {
-                    load_entries(current_category, offset + 20);
-                    draw_list(current_category);
+                    load_list_path(current_category, offset + 20);
+                    draw_list(menu_path);
                 }
                 else if (current_page == PAGE_SEARCH && offset + item_count < total_count)
                 {
@@ -2052,8 +2216,8 @@ int main(void)
                 {
                     int new_offset = offset - 20;
                     if (new_offset < 0) new_offset = 0;
-                    load_entries(current_category, new_offset);
-                    draw_list(current_category);
+                    load_list_path(current_category, new_offset);
+                    draw_list(menu_path);
                 }
                 else if (current_page == PAGE_SEARCH && offset > 0)
                 {

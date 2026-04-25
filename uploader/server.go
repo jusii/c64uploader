@@ -14,13 +14,15 @@ import (
 )
 
 // C64 protocol commands:
-// CATS                         - List categories
-// LIST <cat> <offset> <n>      - List n entries from category starting at offset
+// CATS                         - List categories (legacy)
+// LIST <cat> <offset> <n>      - List n entries from category starting at offset (legacy)
 // SEARCH <off> <n> <query>     - Search all entries (query can be multi-word)
 // SEARCH <off> <n> <cat> <q>   - Search within category (cat=All for all)
 // INFO <id>                    - Get entry details
 // RUN <id>                     - Download and run entry
 // RELEASES <off> <n> <title>   - List all releases of a title (for grouped results)
+// MENU [path]                  - Get menu entries at path (hierarchical navigation)
+// LISTPATH <off> <n> <path>    - List entries matching path prefix
 // QUIT                         - Close connection
 
 const (
@@ -188,6 +190,24 @@ func handleC64Command(line string, index *SearchIndex, apiClient *APIClient, ass
 		// Title is all remaining parts joined (may contain spaces)
 		title := strings.Join(parts[4:], " ")
 		return handleReleases(index, category, title, offset, count)
+
+	case "MENU":
+		// MENU [path] - Get menu entries at path for hierarchical navigation
+		path := ""
+		if len(parts) >= 2 {
+			path = strings.Join(parts[1:], " ")
+		}
+		return handleMenu(index, path)
+
+	case "LISTPATH":
+		// LISTPATH offset count path - List entries matching path prefix
+		if len(parts) < 4 {
+			return "ERR Usage: LISTPATH <offset> <count> <path>\n"
+		}
+		offset, _ := strconv.Atoi(parts[1])
+		count, _ := strconv.Atoi(parts[2])
+		path := strings.Join(parts[3:], " ")
+		return handleListPath(index, path, offset, count)
 
 	case "QUIT":
 		return "QUIT"
@@ -613,6 +633,566 @@ type groupedEntry struct {
 	MaxTrainers     int // Maximum trainer count among all releases (-1 = unknown)
 }
 
+// handleListPath lists entries matching a path prefix, grouped by title.
+// Path can be like "Games/CSDB/Top200" or "Games/CSDB/All/A" (letter filter).
+func handleListPath(index *SearchIndex, pathFilter string, offset, count int) string {
+	pathLower := strings.ToLower(pathFilter)
+
+	// Check if last component is a letter filter (single char A-Z or #)
+	parts := strings.Split(pathFilter, "/")
+	letterFilter := ""
+	if len(parts) > 0 {
+		last := parts[len(parts)-1]
+		if len(last) == 1 && ((last >= "A" && last <= "Z") || (last >= "a" && last <= "z") || last == "#") {
+			letterFilter = strings.ToUpper(last)
+			basePath := strings.Join(parts[:len(parts)-1], "/")
+			pathLower = strings.ToLower(basePath)
+		}
+	}
+
+	// Handle "All" virtual folder - strip it from the path for matching
+	// "Games/C64com/All" should match entries under "Games/C64com"
+	if strings.Contains(pathLower, "/all") {
+		pathLower = strings.Replace(pathLower, "/all", "", 1)
+	}
+
+	// Collect matching entries
+	var matchingEntries []int
+	for i, entry := range index.Entries {
+		if !strings.HasPrefix(strings.ToLower(entry.Path), pathLower) {
+			continue
+		}
+
+		// Apply letter filter if specified
+		if letterFilter != "" {
+			if len(entry.Name) == 0 {
+				continue
+			}
+			firstChar := strings.ToUpper(string(entry.Name[0]))
+			if letterFilter == "#" {
+				// Match non-alphabetic
+				if firstChar >= "A" && firstChar <= "Z" {
+					continue
+				}
+			} else if firstChar != letterFilter {
+				continue
+			}
+		}
+
+		matchingEntries = append(matchingEntries, i)
+	}
+
+	// Group by normalized title
+	seen := make(map[string]int) // normalized_title -> index in grouped slice
+	var grouped []groupedEntry
+
+	for _, idx := range matchingEntries {
+		entry := index.Entries[idx]
+		norm := normalizeTitle(entry.Name)
+
+		// Get trainer count for this entry
+		trainers := -1
+		if entry.Crack != nil {
+			trainers = entry.Crack.Trainers
+		}
+
+		if existingIdx, ok := seen[norm]; ok {
+			grouped[existingIdx].Count++
+			if trainers > grouped[existingIdx].MaxTrainers {
+				grouped[existingIdx].MaxTrainers = trainers
+			}
+		} else {
+			seen[norm] = len(grouped)
+			grouped = append(grouped, groupedEntry{
+				NormalizedTitle: norm,
+				DisplayTitle:    entry.Name,
+				Category:        entry.CategoryName,
+				FirstID:         idx,
+				Count:           1,
+				MaxTrainers:     trainers,
+			})
+		}
+	}
+
+	total := len(grouped)
+	if offset >= total {
+		return fmt.Sprintf("OK 0 %d\n.\n", total)
+	}
+
+	end := offset + count
+	if count == 0 || end > total {
+		end = total
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("OK %d %d\n", end-offset, total))
+
+	for i := offset; i < end; i++ {
+		g := grouped[i]
+		// Format: ID|Name|Category|Count|Trainers (same as grouped LIST)
+		b.WriteString(fmt.Sprintf("%d|%s|%s|%d|%d\n",
+			g.FirstID, g.DisplayTitle, g.Category, g.Count, g.MaxTrainers))
+	}
+	b.WriteString(".\n")
+	return b.String()
+}
+
+// menuEntry represents an item in the hierarchical menu.
+type menuEntry struct {
+	Name    string // Display name
+	Type    string // "folder" or "list"
+	Path    string // Full path for navigation
+	Count   int    // Number of items (for lists)
+}
+
+// handleMenu returns menu entries for hierarchical navigation.
+// Path format: "" (root), "Games", "Games/CSDB", "Games/CSDB/Top200", etc.
+func handleMenu(index *SearchIndex, path string) string {
+	var entries []menuEntry
+
+	if path == "" {
+		// Root menu - show main categories
+		entries = []menuEntry{
+			{Name: "Games", Type: "folder", Path: "Games"},
+			{Name: "Demos", Type: "folder", Path: "Demos"},
+			{Name: "Music", Type: "folder", Path: "Music"},
+			{Name: "Intros", Type: "folder", Path: "Intros"},
+			{Name: "Graphics", Type: "folder", Path: "Graphics"},
+			{Name: "Discmags", Type: "folder", Path: "Discmags"},
+		}
+	} else {
+		entries = getMenuEntries(index, path)
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("OK %d\n", len(entries)))
+	for _, e := range entries {
+		// Format: type|name|path|count
+		b.WriteString(fmt.Sprintf("%s|%s|%s|%d\n", e.Type, e.Name, e.Path, e.Count))
+	}
+	b.WriteString(".\n")
+	return b.String()
+}
+
+// getMenuEntries returns menu entries for a given path.
+func getMenuEntries(index *SearchIndex, path string) []menuEntry {
+	parts := strings.Split(path, "/")
+	category := parts[0]
+
+	switch category {
+	case "Games":
+		return getGamesMenu(index, parts)
+	case "Demos":
+		return getDemosMenu(index, parts)
+	case "Music":
+		return getMusicMenu(index, parts)
+	case "Intros":
+		return getIntrosMenu(index, parts)
+	case "Graphics":
+		return getGraphicsMenu(index, parts)
+	case "Discmags":
+		return getDiscmagsMenu(index, parts)
+	default:
+		return nil
+	}
+}
+
+// getGamesMenu returns menu entries for Games category.
+func getGamesMenu(index *SearchIndex, parts []string) []menuEntry {
+	if len(parts) == 1 {
+		// Games/ - show sources
+		return []menuEntry{
+			{Name: "CSDB", Type: "folder", Path: "Games/CSDB"},
+			{Name: "C64.com", Type: "folder", Path: "Games/C64com"},
+			{Name: "Gamebase", Type: "folder", Path: "Games/Gamebase"},
+			{Name: "Guybrush", Type: "folder", Path: "Games/Guybrush"},
+			{Name: "Guybrush German", Type: "folder", Path: "Games/Guybrush-german"},
+			{Name: "OneLoad64", Type: "folder", Path: "Games/OneLoad64"},
+			{Name: "Mayhem CRT", Type: "folder", Path: "Games/Mayhem-crt"},
+			{Name: "C64 Tapes", Type: "folder", Path: "Games/C64Tapes-org"},
+			{Name: "Preservers", Type: "folder", Path: "Games/Preservers"},
+			{Name: "SEUCK", Type: "folder", Path: "Games/SEUCK"},
+		}
+	}
+
+	source := parts[1]
+	if len(parts) == 2 {
+		// Games/Source/ - show sub-categories
+		switch source {
+		case "CSDB":
+			return []menuEntry{
+				{Name: "Top 200", Type: "list", Path: "Games/CSDB/Top200", Count: countByPathPrefix(index, "Games/CSDB/Top200")},
+				{Name: "4K Competition", Type: "list", Path: "Games/CSDB/4k", Count: countByPathPrefix(index, "Games/CSDB/4k")},
+				{Name: "All (A-Z)", Type: "folder", Path: "Games/CSDB/All"},
+			}
+		default:
+			// Other sources: go directly to A-Z letter folders
+			// Don't use "All" in path - return letters with source as base
+			return getLetterFoldersWithBase(index, "Games/"+source+"/All", "Games/"+source)
+		}
+	}
+
+	// Games/CSDB/All/ or similar - show letter folders
+	if len(parts) == 3 && parts[2] == "All" {
+		return getLetterFolders(index, joinPath(parts))
+	}
+
+	// Games/CSDB/All/A - this is a terminal list path, return empty menu
+	// Client should use LISTPATH directly for these paths
+	if len(parts) == 4 {
+		return nil
+	}
+
+	return nil
+}
+
+// getDemosMenu returns menu entries for Demos category.
+func getDemosMenu(index *SearchIndex, parts []string) []menuEntry {
+	if len(parts) == 1 {
+		// Demos/ - show sources
+		return []menuEntry{
+			{Name: "CSDB", Type: "folder", Path: "Demos/CSDB"},
+			{Name: "C64.com", Type: "folder", Path: "Demos/C64com"},
+			{Name: "Guybrush", Type: "folder", Path: "Demos/Guybrush"},
+		}
+	}
+
+	source := parts[1]
+	if len(parts) == 2 {
+		switch source {
+		case "CSDB":
+			return []menuEntry{
+				{Name: "Top 200", Type: "list", Path: "Demos/CSDB/Top200", Count: countByPathPrefix(index, "Demos/CSDB/Top200")},
+				{Name: "Top 500", Type: "list", Path: "Demos/CSDB/Top500", Count: countByPathPrefix(index, "Demos/CSDB/Top500")},
+				{Name: "By Year", Type: "folder", Path: "Demos/CSDB/Year"},
+				{Name: "Year Top 20", Type: "folder", Path: "Demos/CSDB/Year-top20"},
+				{Name: "Onefile", Type: "folder", Path: "Demos/CSDB/Onefile"},
+				{Name: "All (A-Z)", Type: "folder", Path: "Demos/CSDB/All"},
+			}
+		default:
+			// Other sources: go directly to A-Z letter folders
+			return getLetterFoldersWithBase(index, "Demos/"+source+"/All", "Demos/"+source)
+		}
+	}
+
+	// Handle sub-folders
+	if len(parts) >= 3 {
+		subPath := parts[2]
+		p := joinPath(parts)
+		switch subPath {
+		case "Year", "Year-top20":
+			if len(parts) == 3 {
+				return getYearFolders(index, p)
+			}
+			// Year selected - terminal list path, return empty menu
+			return nil
+		case "Onefile":
+			if len(parts) == 3 {
+				return getLetterFolders(index, p)
+			}
+			// Terminal list path
+			return nil
+		case "All":
+			if len(parts) == 3 {
+				return getLetterFolders(index, p)
+			}
+			// Terminal list path
+			return nil
+		}
+	}
+
+	return nil
+}
+
+// getMusicMenu returns menu entries for Music category.
+func getMusicMenu(index *SearchIndex, parts []string) []menuEntry {
+	if len(parts) == 1 {
+		return []menuEntry{
+			{Name: "CSDB", Type: "folder", Path: "Music/CSDB"},
+			{Name: "HVSC", Type: "folder", Path: "Music/HVSC"},
+			{Name: "2SID Collection", Type: "folder", Path: "Music/2sid-collection"},
+			{Name: "3SID Collection", Type: "folder", Path: "Music/3sid-collection"},
+		}
+	}
+
+	source := parts[1]
+	if len(parts) == 2 {
+		switch source {
+		case "CSDB":
+			return []menuEntry{
+				{Name: "Top 200", Type: "list", Path: "Music/CSDB/Top200", Count: countByPathPrefix(index, "Music/CSDB/Top200")},
+				{Name: "All (A-Z)", Type: "folder", Path: "Music/CSDB/All"},
+			}
+		default:
+			// Other sources: go directly to A-Z letter folders
+			return getLetterFoldersWithBase(index, "Music/"+source+"/All", "Music/"+source)
+		}
+	}
+
+	if len(parts) >= 3 && parts[2] == "All" {
+		p := joinPath(parts)
+		if len(parts) == 3 {
+			return getLetterFolders(index, p)
+		}
+		// Terminal list path
+		return nil
+	}
+
+	return nil
+}
+
+// getIntrosMenu returns menu entries for Intros category.
+func getIntrosMenu(index *SearchIndex, parts []string) []menuEntry {
+	if len(parts) == 1 {
+		return []menuEntry{
+			{Name: "CSDB", Type: "folder", Path: "Intros/CSDB"},
+			{Name: "C64.org", Type: "folder", Path: "Intros/C64org"},
+		}
+	}
+
+	source := parts[1]
+	if len(parts) == 2 {
+		// Go directly to A-Z letter folders
+		return getLetterFoldersWithBase(index, "Intros/"+source+"/All", "Intros/"+source)
+	}
+
+	if len(parts) >= 3 && parts[2] == "All" {
+		p := joinPath(parts)
+		if len(parts) == 3 {
+			return getLetterFolders(index, p)
+		}
+		// Terminal list path
+		return nil
+	}
+
+	return nil
+}
+
+// getGraphicsMenu returns menu entries for Graphics category.
+func getGraphicsMenu(index *SearchIndex, parts []string) []menuEntry {
+	if len(parts) == 1 {
+		// Only one source, go directly to A-Z letter folders
+		return getLetterFoldersWithBase(index, "Graphics/CSDB/All", "Graphics")
+	}
+
+	// Handle direct navigation to Graphics/CSDB
+	if len(parts) == 2 {
+		return getLetterFoldersWithBase(index, "Graphics/"+parts[1]+"/All", "Graphics/"+parts[1])
+	}
+
+	if len(parts) >= 3 && parts[2] == "All" {
+		p := joinPath(parts)
+		if len(parts) == 3 {
+			return getLetterFolders(index, p)
+		}
+		// Terminal list path
+		return nil
+	}
+
+	return nil
+}
+
+// getDiscmagsMenu returns menu entries for Discmags category.
+func getDiscmagsMenu(index *SearchIndex, parts []string) []menuEntry {
+	if len(parts) == 1 {
+		// Only one source, go directly to A-Z letter folders
+		return getLetterFoldersWithBase(index, "Discmags/CSDB/All", "Discmags")
+	}
+
+	// Handle direct navigation to Discmags/CSDB
+	if len(parts) == 2 {
+		return getLetterFoldersWithBase(index, "Discmags/"+parts[1]+"/All", "Discmags/"+parts[1])
+	}
+
+	if len(parts) >= 3 && parts[2] == "All" {
+		p := joinPath(parts)
+		if len(parts) == 3 {
+			return getLetterFolders(index, p)
+		}
+		// Terminal list path
+		return nil
+	}
+
+	return nil
+}
+
+// joinPath joins parts back into a path string.
+func joinPath(parts []string) string {
+	return strings.Join(parts, "/")
+}
+
+// countByPathPrefix counts entries whose path starts with prefix.
+func countByPathPrefix(index *SearchIndex, prefix string) int {
+	count := 0
+	prefixLower := strings.ToLower(prefix)
+	for _, entry := range index.Entries {
+		if strings.HasPrefix(strings.ToLower(entry.Path), prefixLower) {
+			count++
+		}
+	}
+	return count
+}
+
+// getLetterFolders returns A-Z and # folders for alphabetical navigation.
+func getLetterFolders(index *SearchIndex, basePath string) []menuEntry {
+	// Check which letters have entries
+	letterCounts := make(map[string]int)
+
+	// If basePath ends with /All, use parent path for matching
+	// "All" is a virtual folder - actual entries are under the parent path
+	matchPath := basePath
+	if strings.HasSuffix(basePath, "/All") {
+		matchPath = basePath[:len(basePath)-4] // Remove "/All"
+	}
+	baseLower := strings.ToLower(matchPath)
+
+	for _, entry := range index.Entries {
+		if !strings.HasPrefix(strings.ToLower(entry.Path), baseLower) {
+			continue
+		}
+		// Get first letter of title
+		name := entry.Name
+		if len(name) == 0 {
+			continue
+		}
+		first := strings.ToUpper(string(name[0]))
+		if first >= "A" && first <= "Z" {
+			letterCounts[first]++
+		} else {
+			letterCounts["#"]++
+		}
+	}
+
+	var entries []menuEntry
+	// Add # for numbers/symbols first
+	if count, ok := letterCounts["#"]; ok && count > 0 {
+		entries = append(entries, menuEntry{
+			Name:  "#",
+			Type:  "list",
+			Path:  basePath + "/#",
+			Count: count,
+		})
+	}
+
+	// Add A-Z
+	for c := 'A'; c <= 'Z'; c++ {
+		letter := string(c)
+		if count, ok := letterCounts[letter]; ok && count > 0 {
+			entries = append(entries, menuEntry{
+				Name:  letter,
+				Type:  "list",
+				Path:  basePath + "/" + letter,
+				Count: count,
+			})
+		}
+	}
+
+	return entries
+}
+
+// getLetterFoldersWithBase returns A-Z folders using matchPath for filtering but outputPath for the returned paths.
+// This is used when we want to skip an intermediate menu level (like "All") but still match entries correctly.
+func getLetterFoldersWithBase(index *SearchIndex, matchPath, outputPath string) []menuEntry {
+	letterCounts := make(map[string]int)
+
+	// If matchPath ends with /All, use parent path for matching
+	actualMatchPath := matchPath
+	if strings.HasSuffix(matchPath, "/All") {
+		actualMatchPath = matchPath[:len(matchPath)-4]
+	}
+	baseLower := strings.ToLower(actualMatchPath)
+
+	for _, entry := range index.Entries {
+		if !strings.HasPrefix(strings.ToLower(entry.Path), baseLower) {
+			continue
+		}
+		name := entry.Name
+		if len(name) == 0 {
+			continue
+		}
+		first := strings.ToUpper(string(name[0]))
+		if first >= "A" && first <= "Z" {
+			letterCounts[first]++
+		} else {
+			letterCounts["#"]++
+		}
+	}
+
+	var entries []menuEntry
+	if count, ok := letterCounts["#"]; ok && count > 0 {
+		entries = append(entries, menuEntry{
+			Name:  "#",
+			Type:  "list",
+			Path:  outputPath + "/#",
+			Count: count,
+		})
+	}
+
+	for c := 'A'; c <= 'Z'; c++ {
+		letter := string(c)
+		if count, ok := letterCounts[letter]; ok && count > 0 {
+			entries = append(entries, menuEntry{
+				Name:  letter,
+				Type:  "list",
+				Path:  outputPath + "/" + letter,
+				Count: count,
+			})
+		}
+	}
+
+	return entries
+}
+
+// getYearFolders returns year folders for demos.
+func getYearFolders(index *SearchIndex, basePath string) []menuEntry {
+	yearCounts := make(map[string]int)
+	baseLower := strings.ToLower(basePath)
+
+	for _, entry := range index.Entries {
+		if !strings.HasPrefix(strings.ToLower(entry.Path), baseLower) {
+			continue
+		}
+		// Extract year from path after basePath
+		relPath := entry.Path[len(basePath):]
+		if len(relPath) > 0 && relPath[0] == '/' {
+			relPath = relPath[1:]
+		}
+		parts := strings.Split(relPath, "/")
+		if len(parts) > 0 && len(parts[0]) == 4 {
+			year := parts[0]
+			if _, err := strconv.Atoi(year); err == nil {
+				yearCounts[year]++
+			}
+		}
+	}
+
+	// Sort years descending
+	var years []string
+	for year := range yearCounts {
+		years = append(years, year)
+	}
+	// Simple bubble sort descending
+	for i := 0; i < len(years); i++ {
+		for j := i + 1; j < len(years); j++ {
+			if years[j] > years[i] {
+				years[i], years[j] = years[j], years[i]
+			}
+		}
+	}
+
+	var entries []menuEntry
+	for _, year := range years {
+		entries = append(entries, menuEntry{
+			Name:  year,
+			Type:  "list",
+			Path:  basePath + "/" + year,
+			Count: yearCounts[year],
+		})
+	}
+
+	return entries
+}
+
 // matchSource checks if an entry path matches a source filter.
 // Source names map to path components:
 // - csdb -> /CSDB/
@@ -667,15 +1247,33 @@ func matchSource(path, source string) bool {
 }
 
 // handleReleases returns all releases matching a specific title.
-func handleReleases(index *SearchIndex, category, title string, offset, count int) string {
+// The pathOrCategory can be a path prefix (e.g., "Games/CSDB/All/A") or a category name (e.g., "Games").
+func handleReleases(index *SearchIndex, pathOrCategory, title string, offset, count int) string {
 	normalizedSearch := normalizeTitle(title)
 	var results []int
 
+	// Determine if it's a path (contains /) or a simple category
+	isPath := strings.Contains(pathOrCategory, "/")
+	pathLower := strings.ToLower(pathOrCategory)
+
+	// Handle "All" virtual folder - strip it from the path for matching
+	if strings.Contains(pathLower, "/all") {
+		pathLower = strings.Replace(pathLower, "/all", "", 1)
+	}
+
 	for i, entry := range index.Entries {
-		// Category filter
-		if category != "" && !strings.EqualFold(category, "All") {
-			if !strings.EqualFold(entry.CategoryName, category) {
-				continue
+		// Path/category filter
+		if pathOrCategory != "" && !strings.EqualFold(pathOrCategory, "All") {
+			if isPath {
+				// Path-based filtering (like LISTPATH)
+				if !strings.HasPrefix(strings.ToLower(entry.Path), pathLower) {
+					continue
+				}
+			} else {
+				// Simple category filtering (legacy)
+				if !strings.EqualFold(entry.CategoryName, pathOrCategory) {
+					continue
+				}
 			}
 		}
 

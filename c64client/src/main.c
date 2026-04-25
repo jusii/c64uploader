@@ -76,8 +76,13 @@ static char menu_types[MAX_ITEMS];      // 'f'=folder, 'l'=list
 static NavStackEntry nav_stack[MAX_PATH_DEPTH];  // 664 bytes total
 static int nav_depth = 0;                        // Current stack depth
 
-// Forward declaration for navigation push function
+// Forward declarations for navigation functions
 void push_nav_entry(char type, const char *path, int off, char let, const char *ttl);
+NavStackEntry* pop_nav_entry(void);
+void go_back(void);
+void draw_list(const char *title);
+void draw_releases(void);
+void do_releases(const char *category, const char *title, int start);
 
 // Search category filter: 0=All, 1=Games, 2=Demos, 3=Music
 static int  search_category = 0;
@@ -450,6 +455,48 @@ void push_nav_entry(char type, const char *path, int off, char let, const char *
     entry->title[31] = 0;
 
     nav_depth++;
+}
+
+// Pop navigation entry and return pointer to previous screen
+// Returns NULL if at root (nav_depth <= 1)
+NavStackEntry* pop_nav_entry(void)
+{
+    if (nav_depth <= 1)
+        return NULL;  // At root, can't go back
+
+    nav_depth--;
+    return &nav_stack[nav_depth - 1];
+}
+
+// Navigate back using nav_stack - issues correct command per screen_type
+void go_back(void)
+{
+    NavStackEntry *prev = pop_nav_entry();
+    if (!prev)
+        return;  // At root
+
+    switch (prev->screen_type) {
+        case 'M':
+            load_menu(prev->path);
+            nav_depth--;  // Undo push from load_menu - we're restoring, not navigating
+            draw_list(prev->path[0] ? prev->path : "assembly64");
+            break;
+        case 'E':
+            strcpy(current_category, prev->path);
+            load_list_path(prev->path, prev->offset);
+            current_page = PAGE_LIST;
+            draw_list(menu_path);
+            break;
+        case 'R':
+            strcpy(releases_category, prev->path);
+            strcpy(releases_title, prev->title);
+            do_releases(prev->path, prev->title, prev->offset);
+            current_page = PAGE_RELEASES;
+            draw_releases();
+            break;
+        default:
+            break;  // Unknown screen_type, do nothing
+    }
 }
 
 // Legacy function - calls load_menu with empty path
@@ -2165,26 +2212,10 @@ int main(void)
                         draw_list("assembly64 - categories");
                     }
                 }
-                else if (current_page == PAGE_LIST)
+                else if (current_page == PAGE_LIST || current_page == PAGE_CATS)
                 {
-                    // Go back to menu
-                    load_menu(menu_path);
-                    draw_list(menu_path[0] ? menu_path : "assembly64");
-                }
-                else if (current_page == PAGE_CATS)
-                {
-                    // Go up one level in menu
-                    if (menu_path[0])
-                    {
-                        // Find last / and truncate
-                        char *last = strrchr(menu_path, '/');
-                        if (last)
-                            *last = 0;
-                        else
-                            menu_path[0] = 0;  // Back to root
-                        load_menu(menu_path);
-                        draw_list(menu_path[0] ? menu_path : "assembly64");
-                    }
+                    // Go back using nav_stack
+                    go_back();
                 }
                 else if (current_page == PAGE_ADV_SEARCH)
                 {
@@ -2217,19 +2248,8 @@ int main(void)
                 }
                 else if (current_page == PAGE_RELEASES)
                 {
-                    // Go back to where we came from
-                    if (releases_return_page == PAGE_LIST)
-                    {
-                        load_list_path(current_category, releases_return_offset);  // Restore offset
-                        current_page = PAGE_LIST;
-                        draw_list(menu_path);
-                    }
-                    else
-                    {
-                        do_adv_search(releases_return_offset);  // Restore offset
-                        current_page = PAGE_ADV_RESULTS;
-                        draw_adv_results();
-                    }
+                    // Go back using nav_stack
+                    go_back();
                 }
                 break;
 

@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -224,6 +225,14 @@ func NewSQLiteServer(dbPath, assembly64Path string) (*SQLiteServer, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Ensure myfiles directory exists for user content
+	if err := os.MkdirAll("./myfiles", 0755); err != nil {
+		slog.Warn("Could not create myfiles directory", "error", err)
+	} else {
+		slog.Debug("myfiles directory ready")
+	}
+
 	return &SQLiteServer{db: db, assembly64Path: assembly64Path}, nil
 }
 
@@ -263,6 +272,8 @@ func (s *SQLiteServer) HandleMenu(path string) string {
 		return s.getGraphicsMenu(parts)
 	case "Discmags":
 		return s.getDiscmagsMenu(parts)
+	case "MYFILES":
+		return s.getMyFilesMenu(parts)
 	default:
 		return ".\n"
 	}
@@ -1050,4 +1061,86 @@ func (s *SQLiteServer) GetFilePath(id int64) (string, error) {
 	}
 
 	return filepath.Join(s.assembly64Path, entry.Path, entry.PrimaryFile), nil
+}
+
+// getMyFilesMenu returns directory listing for the MYFILES path.
+// MYFILES paths map to ./myfiles/ on the filesystem.
+func (s *SQLiteServer) getMyFilesMenu(parts []string) string {
+	// Build path: ./myfiles/ + subdirectory
+	subPath := ""
+	if len(parts) > 1 {
+		subPath = strings.Join(parts[1:], "/")
+	}
+	dirPath := filepath.Join("./myfiles", subPath)
+
+	// Security: Prevent path traversal attacks by validating resolved path
+	absBase, err := filepath.Abs("./myfiles")
+	if err != nil {
+		slog.Error("getMyFilesMenu: failed to resolve base path", "error", err)
+		return ".\n"
+	}
+	absFull, err := filepath.Abs(dirPath)
+	if err != nil {
+		slog.Error("getMyFilesMenu: failed to resolve full path", "path", dirPath, "error", err)
+		return ".\n"
+	}
+	if !strings.HasPrefix(absFull, absBase) {
+		slog.Warn("getMyFilesMenu: path traversal attempt blocked", "requested", subPath, "resolved", absFull)
+		return ".\n"
+	}
+
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		slog.Error("getMyFilesMenu: failed to read directory", "path", dirPath, "error", err)
+		return ".\n"
+	}
+
+	var b strings.Builder
+	var validEntries []string
+
+	for _, entry := range entries {
+		name := entry.Name()
+
+		// Skip hidden files and directories
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+
+		entryPath := "MYFILES"
+		if subPath != "" {
+			entryPath = "MYFILES/" + subPath + "/" + name
+		} else {
+			entryPath = "MYFILES/" + name
+		}
+
+		if entry.IsDir() {
+			validEntries = append(validEntries, fmt.Sprintf("D|%s|%s|0", name, entryPath))
+		} else {
+			ext := strings.ToLower(filepath.Ext(name))
+			if isValidMyFilesExtension(ext) {
+				validEntries = append(validEntries, fmt.Sprintf("F|%s|%s|0", name, entryPath))
+			}
+		}
+	}
+
+	// Sort entries alphabetically (case-insensitive)
+	sort.Slice(validEntries, func(i, j int) bool {
+		return strings.ToLower(validEntries[i]) < strings.ToLower(validEntries[j])
+	})
+
+	b.WriteString(fmt.Sprintf("OK %d\n", len(validEntries)))
+	for _, entry := range validEntries {
+		b.WriteString(entry + "\n")
+	}
+	b.WriteString(".\n")
+	return b.String()
+}
+
+// isValidMyFilesExtension checks if a file extension is valid for MYFILES listing.
+func isValidMyFilesExtension(ext string) bool {
+	validExts := map[string]bool{
+		".prg": true, ".d64": true, ".t64": true, ".crt": true,
+		".sid": true, ".tap": true, ".d71": true, ".d81": true, ".g64": true,
+	}
+	return validExts[ext]
 }

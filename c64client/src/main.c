@@ -76,6 +76,9 @@ static char menu_types[MAX_ITEMS];      // 'f'=folder, 'l'=list
 static NavStackEntry nav_stack[MAX_PATH_DEPTH];  // 664 bytes total
 static int nav_depth = 0;                        // Current stack depth
 
+// Forward declaration for navigation push function
+void push_nav_entry(char type, const char *path, int off, char let, const char *ttl);
+
 // Search category filter: 0=All, 1=Games, 2=Demos, 3=Music
 static int  search_category = 0;
 static const char *search_cat_names[] = {"All", "Games", "Demos", "Music"};
@@ -425,8 +428,28 @@ void load_menu(const char *path)
 
     cursor = 0;
     offset = 0;
+    push_nav_entry('M', path, 0, 0, "");
     current_page = PAGE_CATS;
     print_status("ready");
+}
+
+// Push navigation entry to stack for back button support
+// type: 'M'=Menu, 'L'=Letters, 'E'=Entries, 'R'=Releases
+void push_nav_entry(char type, const char *path, int off, char let, const char *ttl)
+{
+    if (nav_depth >= MAX_PATH_DEPTH)
+        return;  // Stack full, can't push
+
+    NavStackEntry *entry = &nav_stack[nav_depth];
+    entry->screen_type = type;
+    strncpy(entry->path, path, 47);
+    entry->path[47] = 0;
+    entry->offset = (unsigned char)off;
+    entry->letter = let;
+    strncpy(entry->title, ttl, 31);
+    entry->title[31] = 0;
+
+    nav_depth++;
 }
 
 // Legacy function - calls load_menu with empty path
@@ -1943,6 +1966,7 @@ int main(void)
                     {
                         // List - load entries
                         strcpy(current_category, menu_paths[cursor]);
+                        push_nav_entry('E', menu_paths[cursor], 0, 0, "");
                         load_list_path(menu_paths[cursor], 0);
                         current_page = PAGE_LIST;
                         draw_list(item_names[0] ? item_names[0] : menu_path);
@@ -1957,6 +1981,7 @@ int main(void)
                         releases_title[31] = 0;
                         strncpy(releases_category, current_category, 47);
                         releases_category[47] = 0;
+                        push_nav_entry('R', releases_category, offset, 0, releases_title);
                         releases_return_page = PAGE_LIST;
                         releases_return_offset = offset;  // Save current offset
                         do_releases(releases_category, releases_title, 0);
@@ -1978,6 +2003,7 @@ int main(void)
                         releases_title[31] = 0;
                         strncpy(releases_category, item_cats[cursor], 7);
                         releases_category[7] = 0;
+                        push_nav_entry('R', releases_category, offset, 0, releases_title);
                         releases_return_page = PAGE_ADV_RESULTS;
                         releases_return_offset = offset;  // Save current offset
                         do_releases(releases_category, releases_title, 0);
@@ -2006,6 +2032,7 @@ int main(void)
                     {
                         // List - load entries
                         strcpy(current_category, menu_paths[cursor]);
+                        push_nav_entry('E', menu_paths[cursor], 0, 0, "");
                         load_list_path(menu_paths[cursor], 0);
                         current_page = PAGE_LIST;
                         draw_list(menu_path);
@@ -2074,6 +2101,7 @@ int main(void)
                     // If grouped entry with multiple releases, enter releases
                     if (item_counts[cursor] > 1)
                     {
+                        push_nav_entry('R', item_cats[cursor], offset, 0, item_names[cursor]);
                         do_releases(item_cats[cursor], item_names[cursor], 0);
                         current_page = PAGE_RELEASES;
                         draw_releases();

@@ -154,6 +154,7 @@ static char releases_title[32];        // Title being viewed
 static char releases_category[48];     // Path or category of releases
 static int  releases_return_page = PAGE_ADV_RESULTS;  // Where to return (PAGE_LIST or PAGE_ADV_RESULTS)
 static int  releases_return_offset = 0;  // Offset to restore when returning
+static int  releases_return_cursor = 0;  // Cursor position within page to restore
 
 // VIC chip at $D000
 #define vic (*(struct VIC *)0xd000)
@@ -439,11 +440,14 @@ void go_back(void)
 {
     if (current_page == PAGE_RELEASES)
     {
-        // Releases -> back to entry list
-        // current_category and releases_return_offset already set
+        // Releases -> back to entry list. Restore both the page offset and
+        // the cursor position so the user lands on the same row they entered
+        // releases from (load_list_path resets cursor to 0, so set it after).
         load_list_path(current_category, releases_return_offset);
+        if (releases_return_cursor < item_count)
+            cursor = releases_return_cursor;
         current_page = PAGE_LIST;
-        draw_list(menu_path);
+        draw_list(current_category);
     }
     else if (current_page == PAGE_LIST)
     {
@@ -455,14 +459,14 @@ void go_back(void)
         load_menu(current_category);
         if (item_count > 0)
         {
-            draw_list(menu_path[0] ? menu_path : "assembly64");
+            draw_list(menu_path[0] ? menu_path : "assembly64 - categories");
         }
         else
         {
             // Shouldn't happen normally, but fall back to parent
             trim_path(menu_path);
             load_menu(menu_path);
-            draw_list(menu_path[0] ? menu_path : "assembly64");
+            draw_list(menu_path[0] ? menu_path : "assembly64 - categories");
         }
     }
     else if (current_page == PAGE_CATS)
@@ -473,7 +477,7 @@ void go_back(void)
 
         trim_path(menu_path);
         load_menu(menu_path);
-        draw_list(menu_path[0] ? menu_path : "assembly64");
+        draw_list(menu_path[0] ? menu_path : "assembly64 - categories");
     }
 }
 
@@ -2059,9 +2063,9 @@ int main(void)
                     {
                         // List or Browse (type 'l' or 'b') - load entries
                         strcpy(current_category, menu_paths[cursor]);
-                        load_list_path(menu_paths[cursor], 0);
+                        load_list_path(current_category, 0);
                         current_page = PAGE_LIST;
-                        draw_list(item_names[0] ? item_names[0] : menu_path);
+                        draw_list(current_category);
                     }
                 }
                 else if (current_page == PAGE_LIST && item_count > 0)
@@ -2074,7 +2078,8 @@ int main(void)
                         strncpy(releases_category, current_category, 47);
                         releases_category[47] = 0;
                         releases_return_page = PAGE_LIST;
-                        releases_return_offset = offset;  // Save current offset
+                        releases_return_offset = offset;
+                        releases_return_cursor = cursor;
                         do_releases(releases_category, releases_title, 0);
                         current_page = PAGE_RELEASES;
                         draw_releases();
@@ -2095,7 +2100,8 @@ int main(void)
                         strncpy(releases_category, item_cats[cursor], 7);
                         releases_category[7] = 0;
                         releases_return_page = PAGE_ADV_RESULTS;
-                        releases_return_offset = offset;  // Save current offset
+                        releases_return_offset = offset;
+                        releases_return_cursor = cursor;
                         do_releases(releases_category, releases_title, 0);
                         current_page = PAGE_RELEASES;
                         draw_releases();
@@ -2116,7 +2122,7 @@ int main(void)
                     {
                         // Folder or Directory - navigate into it
                         load_menu(menu_paths[cursor]);
-                        draw_list(menu_path[0] ? menu_path : "assembly64");
+                        draw_list(menu_path[0] ? menu_path : "assembly64 - categories");
                     }
                     else if (menu_types[cursor] == 'F')
                     {
@@ -2127,9 +2133,9 @@ int main(void)
                     {
                         // List or Browse (type 'l' or 'b') - load entries
                         strcpy(current_category, menu_paths[cursor]);
-                        load_list_path(menu_paths[cursor], 0);
+                        load_list_path(current_category, 0);
                         current_page = PAGE_LIST;
-                        draw_list(menu_path);
+                        draw_list(current_category);
                     }
                 }
                 else if (current_page == PAGE_SETTINGS)

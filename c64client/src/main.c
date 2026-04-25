@@ -1190,9 +1190,10 @@ void draw_list(const char *title)
     }
 }
 
-// Repaint the search input row (row 1). The "_" cursor is shown only when
-// the cursor is in the box (search_in_box); when navigating results, the
-// cursor lives in the result list and the input row stays static.
+// Repaint the search input row (row 1). Query text and cursor render in
+// green so chars typed earlier (during a previous box visit) match the
+// colour of chars typed now. The "_" cursor only shows when the cursor is
+// in the box; in result-list mode the input row stays static.
 static void draw_search_input(void)
 {
     clear_line(1);
@@ -1201,7 +1202,7 @@ static void draw_search_input(void)
     int x = 1 + strlen(search_cat_names[search_category]);
     print_at(x, 1, "] ");
     x += 2;
-    print_at(x, 1, search_query);
+    print_at_color(x, 1, search_query, 5);
     if (search_in_box)
         print_at_color(x + search_query_len, 1, "_", 5);
 }

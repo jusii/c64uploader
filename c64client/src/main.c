@@ -71,6 +71,7 @@ void do_releases(const char *category, const char *title, int start);
 void run_myfile(const char *path);
 static bool is_letter_grid(void);
 void update_letter_grid_cursor(int old_cursor, int new_cursor);
+static void draw_search_input(void);
 
 // Simple search state. Server SEARCH command takes "<offset> <count>
 // [category] <query>" and returns id|name|group|year|type rows. Tab (C= key
@@ -79,14 +80,13 @@ static const char *search_cat_names[] = {"All", "Games", "Demos", "Music"};
 static char search_query[24];
 static byte search_query_len = 0;
 static byte search_category = 0;
-// Debounce: every typed/deleted char in the search box updates the input
-// row immediately for visual feedback but defers the server SEARCH command
-// until JIFFY_LOW reaches search_due_jiffy. Each new keystroke pushes the
-// deadline forward, so a quick burst of typing/deleting only fires one query.
-#define SEARCH_DEBOUNCE_JIFFIES 100  // ~2s of quiet before the query fires
-#define SEARCH_MIN_QUERY_LEN     3  // server SEARCH only fires once query is this long
-static bool search_pending = false;
-static byte search_due_jiffy = 0;
+// Two-mode search: cursor lives either in the input box (typing) or in the
+// result list (navigating). ENTER or cursor-down in the box runs the query
+// and switches modes; cursor-up at the top of the list (or DEL) returns to
+// the box. Typing only goes to the query while in the box, so held letters
+// can't ever corrupt query state by leaking into the result-nav path.
+#define SEARCH_MIN_QUERY_LEN 3
+static bool search_in_box = true;
 
 // Settings edit state
 static int  settings_cursor = 0;  // Which setting is selected
@@ -811,24 +811,46 @@ char get_key(void)
         // repeat we have to check keyb_matrix (level state) via key_pressed().
         byte now = JIFFY_LOW;
 
+        // Two paths can produce a held-state repeat: the "still pressed on
+        // the matrix" branch below, and a spurious one from keyb_poll —
+        // when the C64's keyboard scanner briefly reads "no key" for a
+        // single poll (timing/electrical noise) it forgets the prior matrix
+        // state, so the next poll re-fires the same scancode as a fresh
+        // edge. Both paths get the same auto-repeat filter: only W / S /
+        // cursor-down / cursor-right are allowed to repeat.
+        bool nav_repeat_ok =
+            last_key_scan == KSCAN_W || last_key_scan == KSCAN_S ||
+            last_key_scan == KSCAN_CSR_DOWN || last_key_scan == KSCAN_CSR_RIGHT;
+
         if (keyb_key & KSCAN_QUAL_DOWN)
         {
-            // Fresh press edge: fire immediately, arm initial delay.
-            k = keyb_key & 0x3f;
-            shift = (keyb_key & KSCAN_QUAL_SHIFT) != 0;
-            last_key_scan = k;
-            next_fire_jiffy = now + KEY_INITIAL_DELAY;
+            byte new_k = keyb_key & 0x3f;
+            // Spurious-edge re-fire: same scancode as last time, and level
+            // state confirms the user has held the key continuously. Treat
+            // as a held repeat, NOT a fresh press.
+            if (new_k == last_key_scan && key_pressed(new_k))
+            {
+                if (!nav_repeat_ok)
+                    return 0;
+                if ((byte)(now - next_fire_jiffy) >= 128)
+                    return 0;
+                next_fire_jiffy = now + KEY_REPEAT_RATE;
+                k = last_key_scan;
+                shift = key_shift();
+            }
+            else
+            {
+                // Genuine fresh press.
+                k = new_k;
+                shift = (keyb_key & KSCAN_QUAL_SHIFT) != 0;
+                last_key_scan = k;
+                next_fire_jiffy = now + KEY_INITIAL_DELAY;
+            }
         }
         else if (last_key_scan != 0xFF && key_pressed(last_key_scan))
         {
-            // Same scan code still held. Only the pure-navigation keys
-            // auto-repeat — held letter keys must NOT spam the search box
-            // with duplicate characters, and held action keys (Enter, DEL,
-            // /, Q, C) shouldn't either. Cursor up/down/left/right and W/S
-            // cover all the cases where holding actually helps (list scroll,
-            // grid scroll).
-            if (last_key_scan != KSCAN_W && last_key_scan != KSCAN_S &&
-                last_key_scan != KSCAN_CSR_DOWN && last_key_scan != KSCAN_CSR_RIGHT)
+            // Same scan code still held on the matrix.
+            if (!nav_repeat_ok)
                 return 0;
             if ((byte)(now - next_fire_jiffy) >= 128)
                 return 0;
@@ -1104,17 +1126,11 @@ void draw_list(const char *title)
     // Title
     print_at_color(0, 0, title, 7);  // Yellow
 
-    // Search input row (PAGE_SEARCH only): "[CAT] query_"
+    // Search input row (PAGE_SEARCH only). Same renderer both paths use so
+    // the cursor "_" colour stays consistent on full redraws and partial
+    // (typing) updates.
     if (current_page == PAGE_SEARCH)
-    {
-        print_at(0, 1, "[");
-        print_at_color(1, 1, search_cat_names[search_category], 5);
-        int x = 1 + strlen(search_cat_names[search_category]);
-        print_at(x, 1, "] ");
-        x += 2;
-        print_at(x, 1, search_query);
-        print_at(x + search_query_len, 1, "_");
-    }
+        draw_search_input();
 
     // Info line
     if (item_count > 0)
@@ -1123,7 +1139,9 @@ void draw_list(const char *title)
         sprintf(info, "%d-%d of %ld", offset + 1, offset + item_count, total_count);
         print_at(0, 2, info);
     }
-    // Draw items
+    // Draw items. Selection is suppressed when the cursor is in the search
+    // input box: there's no "current row" to highlight in result-list mode.
+    bool show_selection = (current_page != PAGE_SEARCH) || !search_in_box;
     for (int i = 0; i < item_count && i < LIST_HEIGHT; i++)
     {
         // Use grouped item drawing for PAGE_LIST (shows trainer/release count)
@@ -1134,9 +1152,8 @@ void draw_list(const char *title)
         else
         {
             byte y = i + 4;
-            if (i == cursor)
+            if (show_selection && i == cursor)
             {
-                // Highlight selected item
                 print_at_color(0, y, ">", 1);  // White
                 print_at_color(2, y, item_names[i], 1);
             }
@@ -1153,12 +1170,17 @@ void draw_list(const char *title)
     else if (current_page == PAGE_LIST)
         print_at(0, 23, "w/s:move enter:run >:rel i:info del:bk n/p:pg");
     else if (current_page == PAGE_SEARCH)
-        print_at(0, 23, "type:search c=:cat enter:run i:info del:bk");
+    {
+        if (search_in_box)
+            print_at(0, 23, "type query  enter/down:search  del:back");
+        else
+            print_at(0, 23, "w/s:move enter:run i:info del:edit");
+    }
 }
 
-// Repaint just the search input row (row 1). Cheap; safe to call on every
-// keystroke for instant typing feedback without triggering a full redraw or
-// a server round-trip.
+// Repaint the search input row (row 1). The "_" cursor is shown only when
+// the cursor is in the box (search_in_box); when navigating results, the
+// cursor lives in the result list and the input row stays static.
 static void draw_search_input(void)
 {
     clear_line(1);
@@ -1168,15 +1190,8 @@ static void draw_search_input(void)
     print_at(x, 1, "] ");
     x += 2;
     print_at(x, 1, search_query);
-    print_at(x + search_query_len, 1, "_");
-}
-
-// Mark the current query as needing a server search after the debounce
-// window expires. Called from typed-char, backspace, and Tab handlers.
-static void mark_search_pending(void)
-{
-    search_pending = true;
-    search_due_jiffy = JIFFY_LOW + SEARCH_DEBOUNCE_JIFFIES;
+    if (search_in_box)
+        print_at_color(x + search_query_len, 1, "_", 5);
 }
 
 void draw_settings(void)
@@ -1450,26 +1465,6 @@ int main(void)
 
     while (running)
     {
-        // Fire a deferred search once the debounce window has expired and
-        // no further keystroke has pushed search_due_jiffy forward. This
-        // turns auto-repeat-held DEL or fast typing from "one server query
-        // per keystroke" into "one server query after typing stops".
-        if (search_pending && current_page == PAGE_SEARCH)
-        {
-            byte now = JIFFY_LOW;
-            if ((byte)(now - search_due_jiffy) < 128)
-            {
-                search_pending = false;
-                if (search_query_len >= SEARCH_MIN_QUERY_LEN)
-                    do_search(search_query, 0);
-                else {
-                    item_count = 0;
-                    total_count = 0;
-                }
-                draw_list("assembly64 - search");
-            }
-        }
-
         char key = get_key();
 
         if (key != 0)
@@ -1497,14 +1492,14 @@ int main(void)
                 }
                 break;
 
-            case '/':  // Open simple search (typed query against server SEARCH)
+            case '/':  // Open search: cursor starts in the input box
                 if (current_page == PAGE_CATS)
                 {
                     current_page = PAGE_SEARCH;
+                    search_in_box = true;
                     search_query[0] = 0;
                     search_query_len = 0;
                     search_category = 0;
-                    search_pending = false;
                     item_count = 0;
                     total_count = 0;
                     cursor = 0;
@@ -1513,13 +1508,11 @@ int main(void)
                 }
                 break;
 
-            case '\t':  // Cycle category filter while in search
-                if (current_page == PAGE_SEARCH)
+            case '\t':  // Cycle category filter while in search box only
+                if (current_page == PAGE_SEARCH && search_in_box)
                 {
-                    search_category = (search_category + 1) & 3;  // 0..3
+                    search_category = (search_category + 1) & 3;
                     draw_search_input();
-                    if (search_query_len >= SEARCH_MIN_QUERY_LEN)
-                        mark_search_pending();
                 }
                 break;
 
@@ -1532,7 +1525,7 @@ int main(void)
                         draw_settings();
                     }
                 }
-                else if (current_page == PAGE_SEARCH)
+                else if (current_page == PAGE_SEARCH && !search_in_box)
                 {
                     if (cursor > 0)
                     {
@@ -1547,6 +1540,12 @@ int main(void)
                         do_search(search_query, new_offset);
                         cursor = item_count - 1;
                         if (cursor > LIST_HEIGHT - 1) cursor = LIST_HEIGHT - 1;
+                        draw_list("assembly64 - search");
+                    }
+                    else
+                    {
+                        // At the top of the result list — return to the input box.
+                        search_in_box = true;
                         draw_list("assembly64 - search");
                     }
                 }
@@ -1612,6 +1611,18 @@ int main(void)
                     {
                         settings_cursor++;
                         draw_settings();
+                    }
+                }
+                else if (current_page == PAGE_SEARCH && search_in_box)
+                {
+                    // Down from box: run the search if we have enough chars
+                    // and move into the result list.
+                    if (search_query_len >= SEARCH_MIN_QUERY_LEN)
+                    {
+                        do_search(search_query, 0);
+                        search_in_box = false;
+                        cursor = 0;
+                        draw_list("assembly64 - search");
                     }
                 }
                 else if (current_page == PAGE_SEARCH)
@@ -1803,6 +1814,18 @@ int main(void)
                         draw_list("assembly64 - categories");
                     }
                 }
+                else if (current_page == PAGE_SEARCH && search_in_box)
+                {
+                    // ENTER in the input box: run the query and move cursor
+                    // into the result list.
+                    if (search_query_len >= SEARCH_MIN_QUERY_LEN)
+                    {
+                        do_search(search_query, 0);
+                        search_in_box = false;
+                        cursor = 0;
+                        draw_list("assembly64 - search");
+                    }
+                }
                 else if (current_page == PAGE_RELEASES && item_count > 0)
                 {
                     // Run selected release
@@ -1810,7 +1833,7 @@ int main(void)
                 }
                 else if (item_count > 0)
                 {
-                    // Run entry (page 1 or 2)
+                    // Run entry (PAGE_LIST or PAGE_SEARCH-result-list)
                     run_entry(item_ids[cursor]);
                 }
                 break;
@@ -1837,22 +1860,21 @@ int main(void)
                     // Go back
                     go_back();
                 }
+                else if (current_page == PAGE_SEARCH && !search_in_box)
+                {
+                    // From results: return to the input box, preserving the
+                    // query so the user can refine it.
+                    search_in_box = true;
+                    draw_list("assembly64 - search");
+                }
                 else if (current_page == PAGE_SEARCH)
                 {
+                    // In the input box: backspace, or exit when empty.
                     if (search_query_len > 0)
                     {
                         search_query_len--;
                         search_query[search_query_len] = 0;
                         draw_search_input();
-                        // Defer the actual SEARCH; quick repeated DELs (auto-
-                        // repeat held) don't queue server round-trips.
-                        if (search_query_len >= SEARCH_MIN_QUERY_LEN)
-                            mark_search_pending();
-                        else {
-                            search_pending = false;
-                            item_count = 0;
-                            total_count = 0;
-                        }
                     }
                     else
                     {
@@ -1938,10 +1960,11 @@ int main(void)
                 break;
 
             default:
-                // Typed alphanumeric in search mode → grow query and defer
-                // the SEARCH command behind the debounce timer. Input row is
-                // repainted immediately so typing feels responsive.
-                if (current_page == PAGE_SEARCH &&
+                // Typed alphanumeric: append to query, but only when the
+                // cursor is in the search input box. In result-list mode
+                // the same letter scancodes are ignored; the user must DEL
+                // back to the box first.
+                if (current_page == PAGE_SEARCH && search_in_box &&
                     ((key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9')))
                 {
                     if (search_query_len < (int)sizeof(search_query) - 1)
@@ -1949,8 +1972,6 @@ int main(void)
                         search_query[search_query_len++] = key;
                         search_query[search_query_len] = 0;
                         draw_search_input();
-                        if (search_query_len >= SEARCH_MIN_QUERY_LEN)
-                            mark_search_pending();
                     }
                 }
                 // Typed character in settings edit mode

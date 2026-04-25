@@ -2113,11 +2113,20 @@ int main(void)
                 break;
 
             case 'l':  // Grid left (letter grid only)
-                if (current_page == PAGE_CATS && is_letter_grid() && cursor > 0)
+                if (current_page == PAGE_CATS && is_letter_grid())
                 {
-                    int old = cursor;
-                    cursor--;
-                    update_letter_grid_cursor(old, cursor);
+                    if (cursor % LETTER_GRID_COLS == 0)
+                    {
+                        // Left edge: "wall bump" exits the grid back to its
+                        // parent menu, mirroring how DEL behaves.
+                        go_back();
+                    }
+                    else
+                    {
+                        int old = cursor;
+                        cursor--;
+                        update_letter_grid_cursor(old, cursor);
+                    }
                 }
                 break;
 

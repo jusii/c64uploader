@@ -25,7 +25,9 @@ D64 = $(OUTDIR)/$(PROJECT).d64
 # -n  = native code (faster)
 # -O2 = optimization level 2
 # -tm = target machine (c64)
-CFLAGS = -n -O2 -tm=c64
+# -dNOFLOAT = omit float formatting from printf — we never format floats and
+#             this strips ~1.6KB of unused nformf / faddsub / crt_fdiv code.
+CFLAGS = -n -O2 -tm=c64 -dNOFLOAT
 
 # Add include path if specified
 ifneq ($(OSCAR64_INCLUDE),)

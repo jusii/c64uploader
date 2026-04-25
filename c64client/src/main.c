@@ -951,23 +951,90 @@ bool fetch_info(long id)
 // a key. Non-zero value is returned verbatim and then cleared.
 #define DEBUG_KEY_INJECT (*(volatile byte *)0x02A7)
 
+// Debug hold-key: if $02A8 is non-zero, pretend that scancode (low 6 bits,
+// bit 6 = shift qualifier) is being held on the keyboard matrix. Lets the
+// uploader measure auto-repeat timing without a physical key press.
+#define DEBUG_HOLD_SCAN (*(volatile byte *)0x02A8)
+
+// Press-then-auto-repeat state. Jiffy clock low byte at $A2 ticks at 50 Hz
+// PAL and wraps every ~5s; all comparisons use modular byte arithmetic, so
+// short intervals (<128 ticks) behave correctly across wrap.
+#define JIFFY_LOW  (*(volatile byte *)0xA2)
+#define KEY_INITIAL_DELAY 16  // ~320ms between fresh press and first auto-repeat
+#define KEY_REPEAT_RATE    4  // ~80ms between repeats (~12 Hz)
+
+static byte last_key_scan = 0xFF;  // 0xFF = no key being tracked
+static byte next_fire_jiffy = 0;
+
 char get_key(void)
 {
     byte injected = DEBUG_KEY_INJECT;
     if (injected)
     {
         DEBUG_KEY_INJECT = 0;
+        // Drop physical tracking so a held key after injection doesn't
+        // immediately auto-repeat on the same scancode.
+        last_key_scan = 0xFF;
         return (char)injected;
     }
 
-    keyb_poll();
-
-    if (keyb_key & KSCAN_QUAL_DOWN)
+    byte k;
+    bool shift;
+    byte hold = DEBUG_HOLD_SCAN;
+    if (hold)
     {
-        // Strip both DOWN (0x80) and SHIFT (0x40) qualifiers to get base scancode
-        byte k = keyb_key & 0x3f;
-        bool shift = (keyb_key & KSCAN_QUAL_SHIFT) != 0;
+        // Simulated held key: skip matrix poll entirely.
+        k = hold & 0x3f;
+        shift = (hold & 0x40) != 0;
 
+        byte now = JIFFY_LOW;
+        if (k != last_key_scan)
+        {
+            last_key_scan = k;
+            next_fire_jiffy = now + KEY_INITIAL_DELAY;
+        }
+        else
+        {
+            if ((byte)(now - next_fire_jiffy) >= 128)
+                return 0;
+            next_fire_jiffy = now + KEY_REPEAT_RATE;
+        }
+    }
+    else
+    {
+        keyb_poll();
+
+        // Oscar64's keyb_poll() is an edge detector: keyb_key is only non-zero
+        // on the frame a key transitions from up to down. For held-key auto-
+        // repeat we have to check keyb_matrix (level state) via key_pressed().
+        byte now = JIFFY_LOW;
+
+        if (keyb_key & KSCAN_QUAL_DOWN)
+        {
+            // Fresh press edge: fire immediately, arm initial delay.
+            k = keyb_key & 0x3f;
+            shift = (keyb_key & KSCAN_QUAL_SHIFT) != 0;
+            last_key_scan = k;
+            next_fire_jiffy = now + KEY_INITIAL_DELAY;
+        }
+        else if (last_key_scan != 0xFF && key_pressed(last_key_scan))
+        {
+            // Same scan code still held down on the matrix.
+            if ((byte)(now - next_fire_jiffy) >= 128)
+                return 0;
+            next_fire_jiffy = now + KEY_REPEAT_RATE;
+            k = last_key_scan;
+            shift = key_shift();
+        }
+        else
+        {
+            // Released or no key at all: drop tracking.
+            last_key_scan = 0xFF;
+            return 0;
+        }
+    }
+
+    {
         // Always handle these
         if (k == KSCAN_RETURN) return '\r';
         if (k == KSCAN_DEL) return 8;  // Backspace

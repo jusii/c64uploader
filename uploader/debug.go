@@ -14,11 +14,21 @@ import (
 )
 
 const (
-	screenAddr  = "0400"
+	screenAddr   = "0400"
 	colorAddr   = "d800"
 	screenBytes = 1000 // 40 * 25
 	debugKeyHex = "02a7"
+	debugHoldHex = "02a8"
 )
+
+// Oscar64 KSCAN_* enum values — scan codes of physical keys for DEBUG_HOLD_SCAN.
+// Only the keys we actually want to auto-repeat on are listed.
+var holdScanCodes = map[string]byte{
+	"down":  7,  // KSCAN_CSR_DOWN
+	"right": 2,  // KSCAN_CSR_RIGHT
+	"up":    7 | 0x40,  // CSR_DOWN + shift qualifier
+	"left":  2 | 0x40,  // CSR_RIGHT + shift qualifier
+}
 
 // screenCodeToASCII maps a C64 screen code (0..255) to a printable ASCII byte.
 // Uppercase/graphics character set is assumed, which is what our native app
@@ -102,6 +112,84 @@ func parseKey(tok string) (byte, error) {
 	return 0, fmt.Errorf("unknown key %q (known: up down next prev info enter back right tab space q c slash, or a single char)", tok)
 }
 
+// measureScrollRate holds a key via DEBUG_HOLD_SCAN for `dur` while sampling
+// the cursor row from screen RAM, then reports observed rows/sec. Sampling is
+// bounded by HTTP round-trip time (~10 Hz typical), so very fast scrolls will
+// show cursor jumping multiple rows between samples — we count absolute row
+// delta to stay honest. If the cursor wraps or the list pages, the reported
+// rate may be an underestimate.
+func measureScrollRate(client *APIClient, holdCode byte, dur time.Duration) error {
+	readCursorRow := func() (int, error) {
+		buf, err := client.ReadMemory(screenAddr, screenBytes)
+		if err != nil {
+			return -1, err
+		}
+		for r := 0; r < 25; r++ {
+			// Screen code for '>' is 62.
+			if buf[r*40] == 62 {
+				return r, nil
+			}
+		}
+		return -1, nil
+	}
+
+	startRow, _ := readCursorRow()
+	fmt.Printf("starting row: %d, holding for %s\n", startRow, dur)
+
+	if err := client.WriteMemory(debugHoldHex, []byte{holdCode}); err != nil {
+		return err
+	}
+
+	type sample struct {
+		t   time.Time
+		row int
+	}
+	var samples []sample
+	deadline := time.Now().Add(dur)
+	for time.Now().Before(deadline) {
+		row, err := readCursorRow()
+		if err != nil {
+			_ = client.WriteMemory(debugHoldHex, []byte{0})
+			return err
+		}
+		samples = append(samples, sample{time.Now(), row})
+	}
+
+	if err := client.WriteMemory(debugHoldHex, []byte{0}); err != nil {
+		return err
+	}
+	time.Sleep(100 * time.Millisecond)
+	endRow, _ := readCursorRow()
+
+	if len(samples) < 2 {
+		return fmt.Errorf("not enough samples")
+	}
+	totalMoved := 0
+	for i := 1; i < len(samples); i++ {
+		a, b := samples[i-1].row, samples[i].row
+		if a < 0 || b < 0 {
+			continue
+		}
+		d := b - a
+		if d < 0 {
+			d = -d
+		}
+		totalMoved += d
+	}
+	elapsed := samples[len(samples)-1].t.Sub(samples[0].t).Seconds()
+	avgSampleInterval := elapsed / float64(len(samples)-1)
+	fmt.Printf("samples=%d (avg interval %.0fms), total rows moved=%d over %.2fs = %.1f rows/s\n",
+		len(samples), avgSampleInterval*1000, totalMoved, elapsed, float64(totalMoved)/elapsed)
+	fmt.Printf("end row: %d\n", endRow)
+	// Print the cursor trace to let the user see if it stalled / wrapped.
+	trace := make([]int, 0, len(samples))
+	for _, s := range samples {
+		trace = append(trace, s.row)
+	}
+	fmt.Printf("cursor trace: %v\n", trace)
+	return nil
+}
+
 // injectKey writes a single key code into $02A7 and waits until the client
 // clears it, so rapid sequential presses don't overwrite each other.
 func injectKey(client *APIClient, code byte, timeout time.Duration) error {
@@ -128,6 +216,9 @@ func runDebug(args []string) {
 		fmt.Fprintf(os.Stderr, "Subcommands:\n")
 		fmt.Fprintf(os.Stderr, "  screen                        Peek 40x25 text screen and render as ASCII\n")
 		fmt.Fprintf(os.Stderr, "  press <key>[,<key>...]        Inject one or more keys (requires debug-built client)\n")
+		fmt.Fprintf(os.Stderr, "  hold <direction>              Simulate held physical key (down/up/left/right) for auto-repeat test\n")
+		fmt.Fprintf(os.Stderr, "  release                       Stop simulated hold\n")
+		fmt.Fprintf(os.Stderr, "  scroll-rate <direction> <sec> Hold a key for N seconds and report rows/second\n")
 		fmt.Fprintf(os.Stderr, "  reset                         Soft reset the C64\n")
 		fmt.Fprintf(os.Stderr, "  reboot                        Reboot the Ultimate firmware\n")
 		fmt.Fprintf(os.Stderr, "  menu                          Press Ultimate menu button\n")
@@ -202,6 +293,49 @@ func runDebug(args []string) {
 			os.Exit(1)
 		}
 		fmt.Println("menu button pressed")
+	case "hold":
+		if fs.NArg() < 1 {
+			fmt.Fprintln(os.Stderr, "hold: need direction (down/up/left/right)")
+			os.Exit(1)
+		}
+		code, ok := holdScanCodes[strings.ToLower(fs.Arg(0))]
+		if !ok {
+			fmt.Fprintln(os.Stderr, "hold: unknown direction (use down/up/left/right)")
+			os.Exit(1)
+		}
+		if err := client.WriteMemory(debugHoldHex, []byte{code}); err != nil {
+			fmt.Fprintf(os.Stderr, "hold failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("holding %s (scan=0x%02X)\n", fs.Arg(0), code)
+	case "release":
+		if err := client.WriteMemory(debugHoldHex, []byte{0}); err != nil {
+			fmt.Fprintf(os.Stderr, "release failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("released")
+	case "scroll-rate":
+		if fs.NArg() < 2 {
+			fmt.Fprintln(os.Stderr, "scroll-rate: need direction and seconds")
+			os.Exit(1)
+		}
+		dir := strings.ToLower(fs.Arg(0))
+		code, ok := holdScanCodes[dir]
+		if !ok {
+			fmt.Fprintln(os.Stderr, "scroll-rate: unknown direction")
+			os.Exit(1)
+		}
+		dur, err := time.ParseDuration(fs.Arg(1) + "s")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "scroll-rate: bad seconds: %v\n", err)
+			os.Exit(1)
+		}
+		if err := measureScrollRate(client, code, dur); err != nil {
+			fmt.Fprintf(os.Stderr, "scroll-rate failed: %v\n", err)
+			// Always release even on failure.
+			_ = client.WriteMemory(debugHoldHex, []byte{0})
+			os.Exit(1)
+		}
 	case "info":
 		data, err := client.ReadMemory("0400", 1)
 		if err != nil {

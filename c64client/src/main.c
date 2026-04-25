@@ -39,6 +39,19 @@ static bool connected = false;
 #define PAGE_INFO        6
 #define PAGE_RELEASES    7
 
+// Navigation stack for back button support
+#define MAX_PATH_DEPTH 8
+
+// NavStackEntry stores screen type and context for back navigation
+// Total size: 83 bytes × MAX_PATH_DEPTH(8) = 664 bytes
+typedef struct {
+    char screen_type;     // 'M'=Menu, 'L'=Letters, 'E'=Entries, 'R'=Releases
+    char path[48];        // Path for server command reconstruction
+    unsigned char offset; // Scroll offset to restore position
+    char letter;          // Letter for LISTPATH command (A-Z)
+    char title[32];       // For RELEASES reconstruction
+} NavStackEntry;          // 83 bytes × 8 = 664 bytes total
+
 // Menu/list state
 #define MAX_ITEMS 20
 static char item_names[MAX_ITEMS][32];
@@ -58,6 +71,10 @@ static int  search_query_len = 0;
 static char menu_path[64];              // Current path like "Games/CSDB/All"
 static char menu_paths[MAX_ITEMS][48];  // Path for each menu item
 static char menu_types[MAX_ITEMS];      // 'f'=folder, 'l'=list
+
+// Navigation stack for back button - stores screen type per level
+static NavStackEntry nav_stack[MAX_PATH_DEPTH];  // 664 bytes total
+static int nav_depth = 0;                        // Current stack depth
 
 // Search category filter: 0=All, 1=Games, 2=Demos, 3=Music
 static int  search_category = 0;

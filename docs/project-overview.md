@@ -30,7 +30,7 @@ The C64 Ultimate Uploader enables Commodore 64 users to browse and run programs 
 ### Client Side
 - Commodore 64 with Ultimate II+ or Ultimate 64
 - Network connectivity
-- `a64browser.prg` (loadable at runtime) **or** `a64browser-ef.crt` (EasyFlash autostart cartridge). Both are prebuilt under `c64client/dist/`.
+- `a64browser.prg` (loadable at runtime) **or** `a64browser.crt` (EasyFlash autostart cartridge, REU-aware subtype 1). Both are prebuilt under `c64client/dist/`.
 
 ## Architecture
 

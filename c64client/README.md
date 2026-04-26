@@ -11,38 +11,33 @@ Native C64 client for browsing the Assembly64 database via Ultimate II+ network 
 ## Building
 
 ```bash
-# Build PRG file (recommended deployment)
+# Build PRG file
 make prg
 
-# Build 16 KB CRT cartridge image (currently overflows; left for size tracking)
+# Build EasyFlash cartridge (REU-aware subtype 1) — the cart we ship
 make crt
-
-# Build EasyFlash cartridge image (subtype 1, REU-aware)
-make ef
 
 # Build D64 disk image (requires VICE c1541)
 make d64
 ```
 
-`make crt` adds `-tf=crt16` (16 KB autostart cart — currently overflows the slot since the unified config screen + autostart logic landed; left in the Makefile for size tracking). `make ef` adds `-tf=crt -csub=1` (EasyFlash, REU-aware subtype 1). `-dNOFLOAT` is on by default — we never format floats, and dropping the oscar64 float-printf helpers saves ~1.6 KB. Both `.prg` and `.crt` (EasyFlash) are supported deployments; the EasyFlash variant requires the firmware setting `Modem Settings → ACIA (6551) Mapping = Off`. See [docs/architecture-c64client.md](../docs/architecture-c64client.md#easyflash--tfcrt-build-target) for the full investigation.
+`make crt` adds `-tf=crt -csub=1` (EasyFlash, REU-aware subtype 1). The vanilla 16 KB CRT16 slot can't hold the binary anymore, so the EasyFlash format is the only cart target. `-dNOFLOAT` is on by default — we never format floats, and dropping the oscar64 float-printf helpers saves ~1.6 KB. Both `.prg` and `.crt` are supported deployments; the cart requires the firmware setting `Modem Settings → ACIA (6551) Mapping = Off`. See [docs/architecture-c64client.md](../docs/architecture-c64client.md#easyflash--tfcrt-build-target) for the full investigation.
 
 Prebuilt binaries are committed under [dist/](dist/) so users can deploy without installing oscar64.
 
-### Notes on the cart variants
+### Notes on the cart
 
 - The cart contains exactly the same browser as the .prg. There is no
   feature gap in the source.
-- Cart targets bypass the C64 KERNAL boot path; the program therefore
+- The cart bypasses the C64 KERNAL boot path; the program therefore
   initializes the VIC chip (display on, text mode, default screen
   pointers) and runs `init_state()` to set the few non-zero defaults
-  at runtime. Static variables with explicit initializers cannot be
-  used in CRT16 builds because the runtime keeps the data section in
-  cart ROM (read-only); the same code is safe under EasyFlash because
-  the boot stub LZ-decompresses the data section into RAM. See
-  [c64client/src/main.c](src/main.c) for the pattern.
-- CRT16's 16 KB hard limit is the binding constraint when the binary
-  grows; the EasyFlash target sidesteps it (cart bank 0 holds the
-  LZ-compressed snapshot which decompresses into ~30 KB of low RAM).
+  at runtime. The EasyFlash boot stub LZ-decompresses the data section
+  into RAM, so static variables with explicit initializers work fine.
+  See [c64client/src/main.c](src/main.c) for the pattern.
+- The EasyFlash format is what makes the cart format viable at all:
+  cart bank 0 holds an LZ-compressed snapshot that decompresses into
+  ~30 KB of low RAM, well past the 16 KB the binary now needs.
 
 ## Running
 
@@ -62,16 +57,16 @@ U2P_HOST=192.168.1.x make deploy
 U2P_HOST=192.168.1.x make runprg
 
 # Run the EasyFlash .crt directly via the Ultimate REST API
-U2P_HOST=192.168.1.x make runef
+U2P_HOST=192.168.1.x make runcrt
 
 # Or use the prebuilt binaries with the c64uploader CLI:
 ./c64uploader load -host <ultimate-ip> dist/a64browser.prg
-./c64uploader load -host <ultimate-ip> dist/a64browser-ef.crt
+./c64uploader load -host <ultimate-ip> dist/a64browser.crt
 ```
 
-The EasyFlash form factor is what you want if you ever flash a real
-EasyFlash / KFF / similar — the C64 boots straight into the browser
-on power-on with no PC involvement.
+The .crt is what you want if you ever flash a real EasyFlash / KFF /
+similar — the C64 boots straight into the browser on power-on with no
+PC involvement.
 
 ## Project Structure
 
@@ -82,7 +77,7 @@ c64client/
 │   ├── ultimate.h    - Ultimate II+ library header
 │   └── ultimate.c    - Ultimate II+ library (ported from cc65)
 ├── build/            - Build output (gitignored)
-├── dist/             - Prebuilt artifacts (a64browser.prg, a64browser-ef.crt)
+├── dist/             - Prebuilt artifacts (a64browser.prg, a64browser.crt)
 ├── Makefile
 └── README.md
 ```

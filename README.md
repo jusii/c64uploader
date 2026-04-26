@@ -285,10 +285,10 @@ The `a64browser` is a native C64 application located in the `c64client/` directo
 
 ### Running a64browser on C64
 
-1. Build the client, **or use the prebuilt binaries** in [c64client/dist/](c64client/dist/) (`a64browser.prg` and `a64browser-ef.crt`). Building requires oscar64 and is described in [c64client/README.md](c64client/README.md):
+1. Build the client, **or use the prebuilt binaries** in [c64client/dist/](c64client/dist/) (`a64browser.prg` and `a64browser.crt`). Building requires oscar64 and is described in [c64client/README.md](c64client/README.md):
    ```bash
-   cd c64client && make prg ef
-   # produces build/a64browser.prg and build/a64browser-ef.crt
+   cd c64client && make prg crt
+   # produces build/a64browser.prg and build/a64browser.crt (EasyFlash)
    ```
 
 2. Start the protocol server on your PC:
@@ -298,7 +298,7 @@ The `a64browser` is a native C64 application located in the `c64client/` directo
 
 3. Launch the browser on your C64 Ultimate. Three ways:
    - **PRG + load**: `./c64uploader load -host <ultimate-ip> c64client/dist/a64browser.prg` — uploads and runs in one shot. Recommended.
-   - **EasyFlash CRT**: `./c64uploader load -host <ultimate-ip> c64client/dist/a64browser-ef.crt` — same flow but the Ultimate runs it as a REU-aware EasyFlash cartridge. Useful for fast cold-boot and the option to flash a real EasyFlash so the C64 powers up directly into the browser. Requires the firmware setting `Modem Settings → ACIA (6551) Mapping = Off` (the default `DE00/NMI` SwiftLink intercepts the cart's bank-control writes). F7 cleanly drops back to BASIC.
+   - **Cart (EasyFlash)**: `./c64uploader load -host <ultimate-ip> c64client/dist/a64browser.crt` — same flow but the Ultimate runs it as a REU-aware EasyFlash cartridge. Useful for fast cold-boot and the option to flash a real EasyFlash so the C64 powers up directly into the browser. Requires the firmware setting `Modem Settings → ACIA (6551) Mapping = Off` (the default `DE00/NMI` SwiftLink intercepts the cart's bank-control writes). F7 cleanly drops back to BASIC.
    - **FTP + manual launch**: copy the .prg to the Ultimate's filesystem and load it from BASIC.
 
 4. On startup:

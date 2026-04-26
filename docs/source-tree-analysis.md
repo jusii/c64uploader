@@ -165,13 +165,12 @@ uploader/
 ```
 c64client/build/             # Build output (gitignored)
   ├── a64browser.prg         # PRG executable (16953 bytes)
-  ├── a64browser.crt         # CRT16 (currently overflows 16 KB)
-  ├── a64browser-ef.crt      # EasyFlash cartridge (16480 bytes, REU-aware subtype 1)
+  ├── a64browser.crt         # EasyFlash cartridge (16480 bytes, REU-aware subtype 1)
   └── a64browser.d64         # Disk image
 
 c64client/dist/              # Prebuilt artifacts (tracked in git)
   ├── a64browser.prg
-  └── a64browser-ef.crt
+  └── a64browser.crt
 ```
 
 ## Configuration Files

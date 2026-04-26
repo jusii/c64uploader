@@ -282,14 +282,13 @@ make runcrt   # Execute cartridge via REST API
 - `-O2` - Optimization level 2
 - `-tm=c64` - Target machine: Commodore 64
 - `-dNOFLOAT` - Drop oscar64's float-printf helpers (we never format floats; saves ~1.6 KB)
-- `-tf=crt16` - 16 KB autostart cartridge image (CRT16; currently overflows the 16 KB slot)
-- `-tf=crt -csub=1` - EasyFlash cartridge image, REU-aware subtype 1 (`make ef`)
+- `-tf=crt -csub=1` - EasyFlash cartridge image, REU-aware subtype 1 (`make crt` — the cart we ship)
 
 ### Cart-target constraints
 
-The CRT16 build runs as a 16 KB autostart cartridge mapped at `$8000-$BFFF`. Two oscar64 cart-runtime details govern how the source is written:
+The cart runs from EasyFlash at `$8000-$BFFF` with the boot stub LZ-decompressing the data section into RAM at startup. Two oscar64 cart-runtime details govern how the source is written:
 
-1. **No data segment copy.** Oscar64's CRT8/CRT16 startup clears BSS but does not copy the data section from cart ROM to RAM. Any `static <type> x = <value>;` ends up at an address inside `$8000-$BFFF` and is read-only. **All globals/statics in `main.c` and `ultimate.c` are declared without initializers** so they land in BSS (zero-cleared on boot); the genuinely non-zero defaults are assigned at runtime by `init_state()` at the top of `main()`:
+1. **No KERNAL data segment init.** Even with the EasyFlash boot stub handling the data copy, the C64 KERNAL is bypassed, so the program runs `init_state()` at the top of `main()` to assign the genuinely-non-zero defaults:
    - `server_host` ← `DEFAULT_SERVER_HOST` via `strcpy`
    - `server_port` ← `DEFAULT_SERVER_PORT`
    - `auto_connect` ← `false`
@@ -300,11 +299,11 @@ The CRT16 build runs as a 16 KB autostart cartridge mapped at `$8000-$BFFF`. Two
 
 The .prg variant uses the regular C64 boot path where the KERNAL initializes both the data segment and the VIC; the same source code runs identically in both.
 
-The CRT16 build currently exceeds the 16 KB slot (~16.5 KB) since the unified config screen and autostart logic landed. The supported cartridge target is now the EasyFlash variant (`make ef`); both `.prg` and EasyFlash `.crt` are shipped in [`c64client/dist/`](../c64client/dist/).
+A vanilla 16 KB CRT16 cartridge isn't viable: the binary now exceeds 16 KB since the unified config screen and autostart logic landed. The shipped cartridge target is the EasyFlash variant (`make crt`); both `.prg` and `.crt` are shipped in [`c64client/dist/`](../c64client/dist/).
 
-### EasyFlash (`-tf=crt`) build target
+### EasyFlash (`-tf=crt -csub=1`) build target
 
-`make ef` builds an EasyFlash cartridge image (`a64browser-ef.crt`). It links, boots, and the full UCI surface works; F7 cleanly drops to BASIC. Getting there required three firmware-specific gotchas that aren't in the published EasyFlash spec or the user-facing Ultimate docs:
+`make crt` builds an EasyFlash cartridge image (`a64browser.crt`). It links, boots, and the full UCI surface works; F7 cleanly drops to BASIC. Getting there required three firmware-specific gotchas that aren't in the published EasyFlash spec or the user-facing Ultimate docs:
 
 **1. RAM region sizing.** Out of the box `-tf=crt` fails with `error 3034: Could not place object 'X'  Size N Available 0 in section 'bss'` for every static, plus `Cannot place stack section` / `Cannot place heap section`. The errors look like a "BSS conflict" but really mean the entire `main` region is exhausted. oscar64's auto-config gives the EasyFlash format the same 16 KB region as PRG (`0x0900-0x4700`); a ~17 KB binary doesn't fit, and the linker reports it section by section.
 
@@ -316,18 +315,18 @@ The fix is the canonical EasyFlash layout from oscar64's `samples/memmap/easyfla
 #endif
 ```
 
-This stretches the RAM region to 30 KB (everything below the cart at $8000). The boot stub LZ-compresses this region into cart bank 0 ROM and decompresses it back into RAM at startup, so code/data/BSS/heap/stack all live in RAM after boot — same shape as PRG, just delivered through a cart. PRG and CRT16 builds use oscar64's auto-configured regions and ignore the pragma.
+This stretches the RAM region to 30 KB (everything below the cart at $8000). The boot stub LZ-compresses this region into cart bank 0 ROM and decompresses it back into RAM at startup, so code/data/BSS/heap/stack all live in RAM after boot — same shape as PRG, just delivered through a cart. The PRG build uses oscar64's auto-configured region and ignores the pragma.
 
 **2. CRT subtype 1 + UCI relocation.** With the pragma in place the cart links and boots — the title bar renders correctly, main() runs — but `uci_identify()` spins forever because reads from `$DF1C` return open-bus `$FF`. Two pieces in play:
 
 - Standard EasyFlash carts (CRT subtype 0) reserve $DF00-$DFFF as 256 bytes of cart RAM. This collides with the Ultimate's default UCI mapping at $DF1C-$DF1F, and the firmware auto-disables UCI for the cart's lifetime. Cure: the EasyFlash hardware sub-type byte at CRT header offset 0x1A. Subtype 1 ("REU-aware EasyFlash") tells the firmware the ROM image will not touch $DF00-$DFFF. oscar64 supports a `-csub=1` flag that writes the subtype byte.
 - With subtype 1 the Ultimate firmware does not "leave UCI alone at $DF1C" — it **relocates UCI to $DE1C-$DE1F** (I/O 1). The cart still owns all of I/O 2; UCI moves to I/O 1, where EasyFlash's $DE00/$DE02 bank-control registers don't extend up to $DE1C. The relevant flag in firmware ([GideonZ/1541ultimate commit 8e92e6d](https://github.com/GideonZ/1541ultimate/commit/8e92e6dbd5b152c80112b83a5b283e6feb984a2d)) is literally named `CART_UCI_DE1C`. This relocation isn't called out in the user-facing docs; the trail leads through the [Zak McKracken / Ultimate-64 forum64.de thread](https://www.forum64.de/index.php?thread/154897-zak-mckracken-st%C3%BCrzt-auf-dem-ultimate64-ab/=&pageNo=4).
 
-`ultimate.h` defines the UCI register addresses conditional on `OSCAR_TARGET_CRT_EASYFLASH` so the same `ultimate.c` compiles for both the .prg/CRT16 case (UCI at $DF1C) and the EF case (UCI at $DE1C). The cart now reaches the server, navigates menus, and exercises the full UCI surface on the test C64 Ultimate (firmware 1.1.0).
+`ultimate.h` defines the UCI register addresses conditional on `OSCAR_TARGET_CRT_EASYFLASH` so the same `ultimate.c` compiles for both the .prg case (UCI at $DF1C) and the cart case (UCI at $DE1C). The cart reaches the server, navigates menus, and exercises the full UCI surface on the test C64 Ultimate (firmware 1.1.0).
 
 **3. F7 exit-to-BASIC.** Software-disabling the cart from inside it took two firmware-specific gotchas to get right; the published EasyFlash spec doesn't reflect what the C64 Ultimate firmware 1.1.0 actually implements:
 
-- **ACIA modem mapping must be Off.** When the firmware's `Modem Settings → ACIA (6551) Mapping` is `DE00/NMI` (the default), the SwiftLink/ACIA emulation claims `$DE00-$DE07` and intercepts every write — including the `$DE02` bank-control writes EasyFlash needs. The cart-disable silently goes to the ACIA command register and the EF stays mapped. Set `ACIA (6551) Mapping = Off` in firmware config before running the EF cart, or `make runef` is a no-op for exit purposes.
+- **ACIA modem mapping must be Off.** When the firmware's `Modem Settings → ACIA (6551) Mapping` is `DE00/NMI` (the default), the SwiftLink/ACIA emulation claims `$DE00-$DE07` and intercepts every write — including the `$DE02` bank-control writes EasyFlash needs. The cart-disable silently goes to the ACIA command register and the cart stays mapped. Set `ACIA (6551) Mapping = Off` in firmware config before running the cart, or `make runcrt` is a no-op for exit purposes.
 - **The kill value is `$04`, not `$87`.** The published EF spec says writing `$87` to `$DE02` (mode + `!EXROM=1` + `!GAME=1` + LED) hides the cart. On this firmware, `$87` keeps the cart visible at `$8000-$BFFF`. The only value (out of `$00..$87` walked empirically) that hides the cart at both `$8000` and `$E000` is `$04` — bit 2 alone, every other bit zero. The screen probe routine (in commit history) reads `$8000` after each candidate and shows that `$04` is the unique winner.
 
 With those two pieces in place, the exit sequence is just three instructions:

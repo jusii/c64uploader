@@ -20,8 +20,8 @@
 // boot stub LZ-compresses this region into cart bank 0 ROM and
 // decompresses it back into RAM at startup, so code/data/BSS/heap/
 // stack all live in RAM after boot — same shape as PRG, just delivered
-// through a cart. PRG and CRT16 builds use oscar64's auto-configured
-// regions and ignore this pragma.
+// through a cart. The PRG build uses oscar64's auto-configured region
+// and ignores this pragma.
 //
 // Important Ultimate caveat: builds with `-tf=crt` *must* also pass
 // `-csub=1` (REU-aware EasyFlash subtype 1). Subtype 0 makes the

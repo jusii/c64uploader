@@ -113,15 +113,11 @@ GOOS=windows GOARCH=amd64 go build -o c64uploader.exe
 ```bash
 cd c64client
 
-# Build PRG (default, recommended)
+# Build PRG (default)
 make prg
 
-# Build CRT16 (16 KB autostart cart — currently overflows the slot;
-# kept for size tracking)
+# Build EasyFlash cartridge (REU-aware subtype 1) — the cart we ship
 make crt
-
-# Build EasyFlash CRT (REU-aware subtype 1)
-make ef
 
 # Build disk image (requires c1541)
 make d64
@@ -130,9 +126,9 @@ make d64
 make clean
 ```
 
-`prg`, `crt`, and `ef` are produced from the same source. `make crt` adds `-tf=crt16`; `make ef` adds `-tf=crt -csub=1`. `-dNOFLOAT` is on by default to drop the oscar64 float-printf helpers (~1.6 KB). The CRT16 target currently overflows the 16 KB slot so the supported cartridge target is now EasyFlash. See [docs/architecture-c64client.md](architecture-c64client.md#cart-target-constraints) for the cart-specific source conventions (no static initializers under CRT16, explicit VIC init, `$DE02 = $04` cart-disable).
+`prg` and `crt` are produced from the same source. `make crt` adds `-tf=crt -csub=1` (EasyFlash, subtype 1). `-dNOFLOAT` is on by default to drop the oscar64 float-printf helpers (~1.6 KB). The vanilla 16 KB CRT16 slot can't hold the binary anymore, so EasyFlash is the only cart target. See [docs/architecture-c64client.md](architecture-c64client.md#cart-target-constraints) for the cart-specific source conventions (explicit VIC init, `$DE02 = $04` cart-disable).
 
-Prebuilt `a64browser.prg` and `a64browser-ef.crt` are committed under `c64client/dist/`.
+Prebuilt `a64browser.prg` and `a64browser.crt` are committed under `c64client/dist/`.
 
 ## Running
 

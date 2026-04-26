@@ -12,6 +12,29 @@
 #include <c64/keyboard.h>
 #include "ultimate.h"
 
+// EasyFlash (`-tf=crt`) layout. oscar64's default `main` region is
+// 0x0900-0x4700 (~16 KB) — same as PRG — so a 17 KB binary can't be
+// placed and the link fails with `Could not place object` errors and
+// "Cannot place stack/heap section". Stretch main to all of low RAM
+// (0x0900-0x8000, ~30 KB) following the easyflashshared sample. The
+// boot stub LZ-compresses this region into cart bank 0 ROM and
+// decompresses it back into RAM at startup, so code/data/BSS/heap/
+// stack all live in RAM after boot — same shape as PRG, just delivered
+// through a cart. PRG and CRT16 builds use oscar64's auto-configured
+// regions and ignore this pragma.
+//
+// Important Ultimate caveat: builds with `-tf=crt` *must* also pass
+// `-csub=1` (REU-aware EasyFlash subtype 1). Subtype 0 makes the
+// Ultimate firmware claim all of $DF00-$DFFF for emulated cart RAM,
+// which hides the UCI registers at $DF1C-$DF1F and uci_identify()
+// hangs forever. Subtype 1 leaves $DF00-$DF1F untouched. The EF
+// target is currently a build-and-boot artifact only; on C64 Ultimate
+// firmware 1.1.0 UCI access from inside an EF cart is still
+// unreliable, so the .prg target remains the recommended deployment.
+#ifdef OSCAR_TARGET_CRT_EASYFLASH
+#pragma region(main, 0x0900, 0x8000, , , {code, data, bss, heap, stack})
+#endif
+
 // Server configuration
 #define DEFAULT_SERVER_HOST "192.168.2.66"
 #define DEFAULT_SERVER_PORT 6465

@@ -11,35 +11,42 @@ Native C64 client for browsing the Assembly64 database via Ultimate II+ network 
 ## Building
 
 ```bash
-# Build PRG file (recommended for FTP/load workflow)
+# Build PRG file (recommended deployment)
 make prg
 
-# Build 16 KB CRT cartridge image (autostart)
+# Build 16 KB CRT cartridge image (currently overflows; left for size tracking)
 make crt
+
+# Build EasyFlash cartridge image (subtype 1, REU-aware)
+make ef
 
 # Build D64 disk image (requires VICE c1541)
 make d64
 ```
 
-Both `prg` and `crt` are produced from the same source; `make crt` adds
-`-tf=crt16` to package the binary as a 16 KB autostart cartridge image.
-`-dNOFLOAT` is on by default (we never format floats, and dropping the
-oscar64 float-printf helpers saves ~1.6 KB so the image fits the 16 KB
-cart slot).
+`make crt` adds `-tf=crt16` (16 KB autostart cart). `make ef` adds
+`-tf=crt -csub=1` (EasyFlash with REU-aware subtype). `-dNOFLOAT` is on
+by default — we never format floats, and dropping the oscar64
+float-printf helpers saves ~1.6 KB. The .prg is the supported
+deployment; see [docs/architecture-c64client.md](../docs/architecture-c64client.md#easyflash--tfcrt-build-target)
+for why the EasyFlash target builds and boots but currently can't reach
+the UCI on C64 Ultimate firmware 1.1.0.
 
-### Notes on the cart variant
+### Notes on the cart variants
 
 - The cart contains exactly the same browser as the .prg. There is no
-  feature gap.
+  feature gap in the source.
 - Cart targets bypass the C64 KERNAL boot path; the program therefore
   initializes the VIC chip (display on, text mode, default screen
   pointers) and runs `init_state()` to set the few non-zero defaults
   at runtime. Static variables with explicit initializers cannot be
-  used in cart builds because oscar64's CRT16 runtime keeps the data
-  section in cart ROM (read-only); see [c64client/src/main.c](src/main.c)
-  for the pattern.
-- 16 KB is a hard limit on the cart slot — keep an eye on the .prg
-  size (it tracks .crt-content size) when adding code.
+  used in CRT16 builds because the runtime keeps the data section in
+  cart ROM (read-only); the same code is safe under EasyFlash because
+  the boot stub LZ-decompresses the data section into RAM. See
+  [c64client/src/main.c](src/main.c) for the pattern.
+- CRT16's 16 KB hard limit is the binding constraint when the binary
+  grows; the EasyFlash target sidesteps it (cart bank 0 holds the
+  LZ-compressed snapshot which decompresses into ~30 KB of low RAM).
 
 ## Running
 

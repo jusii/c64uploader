@@ -19,6 +19,7 @@ SOURCES = $(SRCDIR)/main.c $(SRCDIR)/ultimate.c
 # Output files
 PRG = $(OUTDIR)/$(PROJECT).prg
 CRT = $(OUTDIR)/$(PROJECT).crt
+EF  = $(OUTDIR)/$(PROJECT)-ef.crt
 D64 = $(OUTDIR)/$(PROJECT).d64
 
 # Compiler flags
@@ -34,10 +35,19 @@ ifneq ($(OSCAR64_INCLUDE),)
 CFLAGS += -i=$(OSCAR64_INCLUDE)
 endif
 
-# Cartridge flags (16KB autostart - 8KB too small for this app)
+# 16 KB autostart cartridge (CRT16). Smallest cart slot the binary fits
+# into when it does fit; a64browser currently overflows it (~17 KB).
 CRTFLAGS = -tf=crt16
 
-.PHONY: all clean prg crt d64
+# EasyFlash subtype 1 ("REU-aware EasyFlash"). Subtype 1 is required so
+# the Ultimate firmware leaves $DF00-$DF1F free for the UCI registers;
+# subtype 0 would auto-disable UCI for the duration of the cart and the
+# browser's uci_identify() would hang. The matching `#pragma region(main
+# 0x0900-0x8000)` in main.c is conditional on OSCAR_TARGET_CRT_EASYFLASH
+# and stretches the RAM region to 30 KB so the 17 KB image fits.
+EFFLAGS  = -tf=crt -csub=1
+
+.PHONY: all clean prg crt ef d64
 
 all: prg
 
@@ -52,6 +62,10 @@ prg: $(OUTDIR) $(SOURCES)
 # Build CRT cartridge
 crt: $(OUTDIR) $(SOURCES)
 	$(OSCAR64) $(CFLAGS) $(CRTFLAGS) -o=$(CRT) $(SOURCES)
+
+# Build EasyFlash cartridge (REU-aware subtype 1)
+ef: $(OUTDIR) $(SOURCES)
+	$(OSCAR64) $(CFLAGS) $(EFFLAGS) -o=$(EF) $(SOURCES)
 
 # Build D64 disk image (requires c1541 from VICE)
 d64: prg
@@ -75,6 +89,11 @@ runcrt: crt
 	@if [ -z "$$U2P_HOST" ]; then echo "Set U2P_HOST to your Ultimate IP"; exit 1; fi
 	curl -X POST --data-binary @$(CRT) "http://$$U2P_HOST/v1/runners:run_crt"
 
+# Run EasyFlash CRT directly on Ultimate II+ via HTTP API
+runef: ef
+	@if [ -z "$$U2P_HOST" ]; then echo "Set U2P_HOST to your Ultimate IP"; exit 1; fi
+	curl -X POST --data-binary @$(EF) "http://$$U2P_HOST/v1/runners:run_crt"
+
 # Run PRG directly on Ultimate II+ via HTTP API
 runprg: prg
 	@if [ -z "$$U2P_HOST" ]; then echo "Set U2P_HOST to your Ultimate IP"; exit 1; fi
@@ -85,10 +104,14 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  prg     - Build PRG file (default)"
-	@echo "  crt     - Build CRT cartridge"
+	@echo "  crt     - Build 16 KB CRT16 cartridge (currently overflows; build for size tracking)"
+	@echo "  ef      - Build EasyFlash cartridge (REU-aware, subtype 1)"
 	@echo "  d64     - Build D64 disk image"
 	@echo "  run     - Run in VICE emulator"
-	@echo "  deploy  - Upload to Ultimate II+ via FTP"
+	@echo "  runprg  - Run .prg directly on Ultimate via HTTP API"
+	@echo "  runcrt  - Run .crt directly on Ultimate via HTTP API"
+	@echo "  runef   - Run EasyFlash .crt directly on Ultimate via HTTP API"
+	@echo "  deploy  - Upload .prg to Ultimate via FTP"
 	@echo "  clean   - Remove build files"
 	@echo ""
 	@echo "Requirements:"

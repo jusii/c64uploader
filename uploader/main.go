@@ -441,7 +441,7 @@ func runServer(args []string) {
 	// TCP line server. See uploader/SPIFFY_HTTP_API.md.
 	if *spiffyPort > 0 {
 		go func(p int, cid string) {
-			if err := startSpiffyHTTP(p, sqliteServer.db, a64Path, cid); err != nil {
+			if err := startSpiffyHTTP(p, sqliteServer, apiClient, a64Path, cid); err != nil {
 				slog.Error("Spiffy HTTP server error", "error", err)
 			}
 		}(*spiffyPort, *spiffyClientID)

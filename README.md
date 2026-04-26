@@ -188,6 +188,18 @@ Then start the server with the matching port:
 
 The same daemon also runs our native cart's TCP line server on `-port` (default `6465`), so both clients can talk to the same SQLite index simultaneously.
 
+#### Mobile web browser UI
+
+When `-spiffy-http-port` is set, the same listener also serves a mobile-friendly single-page web UI at `/`. Point a phone's browser at `http://<host>:<port>/` and you get the same hierarchy the cart shows — categories → sources → Browse A-Z / Top 200 → entry lists → tap to run. PRG / CRT / D64 / SID launch through the C64 Ultimate's REST API exactly like the cart's run path.
+
+```
+http://192.168.2.66:8000/    # phone-friendly browser UI
+http://192.168.2.66:8000/leet/search/aql/presets  # Spiffy API for stock firmware
+http://192.168.2.66:8000/api/menu?path=Games      # JSON API for the web UI
+```
+
+The web UI's JSON endpoints (`/api/menu`, `/api/list`, `/api/search`, `/api/info/<id>`, `POST /api/run/<id>`) reuse the cart server's existing handlers, so the three clients (cart, stock firmware, phone) all stay in lockstep on hierarchy/search/run semantics.
+
 ### Database Generator
 
 Generate SQLite database from your Assembly64 collection for fast loading and full-text search:

@@ -63,32 +63,45 @@ func spiffyCategoryFromCode(code int) string {
 	return ""
 }
 
-// SpiffyServer wraps the SQLite-backed search and serves the Spiffy API.
+// SpiffyServer wraps the SQLite-backed search and serves the Spiffy API
+// (and the optional web UI under the same listener — see web.go).
 type SpiffyServer struct {
 	db             *DB
+	sqliteServer   *SQLiteServer  // for the web /api/* handlers
+	apiClient      *APIClient     // for the web POST /api/run/<id>
 	assembly64Path string
-	clientID       string // optional gate; empty = no gate
+	clientID       string         // optional gate; empty = no gate
 }
 
-// startSpiffyHTTP starts the Spiffy-compatible HTTP listener on the given
-// port. Blocks until the listener exits. Intended to be run in a goroutine
-// alongside the main TCP line-protocol server.
-func startSpiffyHTTP(port int, db *DB, assembly64Path, clientID string) error {
+// startSpiffyHTTP starts the HTTP listener on the given port. It serves
+//   - /leet/search/*  : Spiffy-compatible API for the Ultimate firmware
+//                       built-in Assembly64 browser
+//   - /api/* and /    : optional mobile-friendly web UI (see web.go)
+// Both paths share the same listener and the same SQLite backend.
+// Intended to be run in a goroutine alongside the TCP line-protocol server.
+func startSpiffyHTTP(port int, sqliteServer *SQLiteServer, apiClient *APIClient, assembly64Path, clientID string) error {
 	srv := &SpiffyServer{
-		db:             db,
+		db:             sqliteServer.db,
+		sqliteServer:   sqliteServer,
+		apiClient:      apiClient,
 		assembly64Path: assembly64Path,
 		clientID:       clientID,
 	}
 	mux := http.NewServeMux()
+
+	// Spiffy-compatible firmware-browser API.
 	mux.HandleFunc("/leet/search/aql/presets", srv.handlePresets)
 	mux.HandleFunc("/leet/search/aql/", srv.handleSearchPaginated)
 	mux.HandleFunc("/leet/search/aql", srv.handleSearch)
 	mux.HandleFunc("/leet/search/entries/", srv.handleEntries)
 	mux.HandleFunc("/leet/search/bin/", srv.handleBinary)
 
+	// Mobile-friendly web UI (in web.go).
+	srv.registerWebRoutes(mux)
+
 	addr := fmt.Sprintf(":%d", port)
-	slog.Info("Spiffy-compatible HTTP server listening", "addr", addr)
-	fmt.Printf("Spiffy-compatible HTTP server listening on :%d (path /leet/search/)\n", port)
+	slog.Info("HTTP server listening", "addr", addr)
+	fmt.Printf("HTTP server listening on :%d (Spiffy /leet/search/, web UI /)\n", port)
 	return http.ListenAndServe(addr, srv.cors(mux))
 }
 

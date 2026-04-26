@@ -18,6 +18,11 @@ c64uploader/
 │   ├── debug.go                 # Remote debug subcommand (screen peek, key inject, scroll-rate, peek)
 │   ├── spiffy.go                # Spiffy-compatible HTTP API (/leet/search/) for the
 │   │                            #   Ultimate firmware's stock Assembly64 browser
+│   ├── web.go                   # Mobile-friendly web UI handlers (/, /static/*, /api/*)
+│   │                            #   co-hosted on the spiffy listener
+│   ├── web/                     # Embedded web assets (//go:embed):
+│   │   ├── index.html           #   single-page UI shell
+│   │   └── static/              #   app.js + style.css
 │   ├── scanner.go               # Filesystem scanner used by dbgen
 │   ├── testclient.go            # Scratch TCP client for protocol debugging (`// +build ignore`)
 │   ├── go.mod                   # Go module definition
@@ -74,6 +79,8 @@ c64uploader/
 | d64.go | Disk parsing | `ReadD64()`, PRG extraction |
 | dbgen_sqlite.go | DB generation | `GenerateSQLiteDB` |
 | debug.go | Remote debug | `runDebug`, `injectKey`, `measureScrollRate`, `hexDump`, screen-code decoding |
+| spiffy.go | Spiffy HTTP API | `startSpiffyHTTP`, `handlePresets`, `handleSearch`, `handleEntries`, `handleBin` |
+| web.go | Mobile web UI handlers | `registerWebRoutes`, `handleIndex`, `apiMenu`, `apiList`, `apiSearch`, `apiInfo`, `apiRun` |
 
 ### c64client/src/ (C64 Native)
 

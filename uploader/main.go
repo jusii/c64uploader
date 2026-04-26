@@ -394,6 +394,8 @@ func runServer(args []string) {
 	verbose := fs.Bool("v", false, "Enable verbose debug logging")
 	assembly64Path := fs.String("assembly64", "~/Downloads/assembly64", "Path to Assembly64 data directory")
 	port := fs.Int("port", 6465, "C64 protocol server port")
+	spiffyPort := fs.Int("spiffy-http-port", 0, "Spiffy-compatible HTTP API port (0 = disabled). Lets the Ultimate firmware's built-in Assembly64 browser use this server as its upstream.")
+	spiffyClientID := fs.String("spiffy-client-id", "", "Optional Client-Id header value the Spiffy HTTP server requires (default: unauthenticated).")
 	fs.Parse(args)
 
 	// Set log level.
@@ -429,6 +431,17 @@ func runServer(args []string) {
 		os.Exit(1)
 	}
 	defer sqliteServer.Close()
+
+	// Optional Spiffy-compatible HTTP listener for the Ultimate firmware's
+	// built-in Assembly64 browser. Backed by the same SQLite handle as the
+	// TCP line server. See uploader/SPIFFY_HTTP_API.md.
+	if *spiffyPort > 0 {
+		go func(p int, cid string) {
+			if err := startSpiffyHTTP(p, sqliteServer.db, a64Path, cid); err != nil {
+				slog.Error("Spiffy HTTP server error", "error", err)
+			}
+		}(*spiffyPort, *spiffyClientID)
+	}
 
 	// Start C64 protocol server with SQLite backend.
 	if err := StartC64ServerSQLite(*port, sqliteServer, apiClient, a64Path); err != nil {

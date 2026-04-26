@@ -151,15 +151,17 @@ Start the C64 protocol server for the C64 client:
 - `-db <path>` - Path to SQLite database file (default: `c64uploader.db` in assembly64 directory)
 - `-assembly64 <path>` - Path to Assembly64 collection (default: `~/Downloads/assembly64`)
 - `-port <port>` - C64 protocol server port (default: `6465`)
+- `-spiffy-http-port <port>` - Spiffy-compatible HTTP API port (default: `0` = disabled). When set, a second listener on this port serves the same `/leet/search/` REST API the Ultimate firmware's built-in Assembly64 browser expects, backed by our SQLite index. Lets the stock firmware browser use this server as its upstream — no custom C64 cart needed. See `uploader/SPIFFY_HTTP_API.md` for the wire format.
+- `-spiffy-client-id <value>` - Optional `Client-Id` header value the Spiffy listener requires (default: empty = unauthenticated).
 - `-v` - Enable verbose debug logging
 
 **Example:**
 ```bash
-./c64uploader server -host 192.168.2.100 -assembly64 ~/assembly64 -port 6465
+./c64uploader server -host 192.168.2.100 -assembly64 ~/assembly64 -port 6465 -spiffy-http-port 8000
 ```
 
 The C64 protocol is a simple line-based protocol optimized for low-bandwidth C64 communication.
-See `uploader/C64PROTOCOL.md` for protocol details.
+See `uploader/C64PROTOCOL.md` for protocol details, or `uploader/SPIFFY_HTTP_API.md` for the Spiffy-compatible HTTP API.
 
 ### Database Generator
 

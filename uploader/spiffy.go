@@ -15,6 +15,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -339,7 +340,13 @@ func (s *SpiffyServer) scanEntryDir(entry *Entry) []entryFile {
 // /leet/search/bin/<id>/<cat>/<idx>{/<filename>} — binary download.
 // -----------------------------------------------------------------------------
 
-var binPathRE = regexp.MustCompile(`^/leet/search/bin/([^/]+)/([0-9]+)/([0-9]+)(?:/[^/]+)?/?$`)
+// The firmware uses two URL shapes for binary download:
+//   /leet/search/bin/<id>/<cat>/<idx>           (numeric index — from search results)
+//   /leet/search/bin/<id>/<cat>/<filename>      (from filesystem_a64 file_open)
+// We accept both. An optional 5th path component is tolerated but ignored
+// (some implementations append the filename after the idx for human-
+// readable URLs).
+var binPathRE = regexp.MustCompile(`^/leet/search/bin/([^/]+)/([0-9]+)/([^/]+)(?:/[^/]+)?/?$`)
 
 func (s *SpiffyServer) handleBinary(w http.ResponseWriter, r *http.Request) {
 	m := binPathRE.FindStringSubmatch(r.URL.Path)
@@ -352,7 +359,11 @@ func (s *SpiffyServer) handleBinary(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	idx, _ := strconv.Atoi(m[3])
+	thirdSeg, err := url.PathUnescape(m[3])
+	if err != nil {
+		http.Error(w, "bad path component", http.StatusBadRequest)
+		return
+	}
 
 	entry, err := s.db.GetEntryByID(id)
 	if err != nil {
@@ -372,7 +383,26 @@ func (s *SpiffyServer) handleBinary(w http.ResponseWriter, r *http.Request) {
 	if len(files) == 0 {
 		files = s.scanEntryDir(entry)
 	}
-	if idx < 0 || idx >= len(files) {
+
+	// Resolve thirdSeg to a file index. Integer → direct index; otherwise
+	// look up by basename (case-insensitive), since the firmware sends the
+	// filename verbatim from the entries response when going through
+	// file_open.
+	idx := -1
+	if i, err := strconv.Atoi(thirdSeg); err == nil {
+		if i >= 0 && i < len(files) {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		for i, f := range files {
+			if strings.EqualFold(f.Path, thirdSeg) {
+				idx = i
+				break
+			}
+		}
+	}
+	if idx < 0 {
 		http.NotFound(w, r)
 		return
 	}

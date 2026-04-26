@@ -480,6 +480,14 @@ void load_menu(const char *path)
     cursor = 0;
     offset = 0;
     current_page = PAGE_CATS;
+    // In a letter grid, item_ids[] holds per-letter counts; skip past any
+    // leading empty letter so the cursor never lands on a non-tappable cell.
+    if (is_letter_grid())
+    {
+        while (cursor < item_count && item_ids[cursor] == 0)
+            cursor++;
+        if (cursor >= item_count) cursor = 0;
+    }
     print_status("ready");
 }
 
@@ -1207,7 +1215,11 @@ static void draw_letter_cell(int idx, bool selected)
     buf[1] = ' ';
     buf[2] = item_names[idx][0];
     buf[3] = 0;
-    print_at_color(x, y, buf, selected ? 1 : 14);
+    // Color 1=white (selected), 14=light blue (active), 11=dark grey (empty
+    // letter — the cart shows all 27 cells so the grid layout stays stable;
+    // dimming + cursor-skip keeps users from drilling into a 0-result list).
+    byte color = selected ? 1 : (item_ids[idx] == 0 ? 11 : 14);
+    print_at_color(x, y, buf, color);
 }
 
 void update_letter_grid_cursor(int old_cursor, int new_cursor)
@@ -1216,6 +1228,18 @@ void update_letter_grid_cursor(int old_cursor, int new_cursor)
         draw_letter_cell(old_cursor, false);
     if (new_cursor >= 0 && new_cursor < item_count)
         draw_letter_cell(new_cursor, true);
+}
+
+// Empty letters (count==0) render dim and aren't tappable. Cursor movement
+// skips them by scanning in `step` direction (±1 horizontal, ±LETTER_GRID_COLS
+// vertical) until a non-empty cell is found or we'd leave the grid.
+static int find_next_letter(int from, int step)
+{
+    int i = from + step;
+    while (i >= 0 && i < item_count && item_ids[i] == 0)
+        i += step;
+    if (i < 0 || i >= item_count) return -1;
+    return i;
 }
 
 static void draw_letter_grid(const char *title)
@@ -1700,11 +1724,13 @@ int main(void)
                 }
                 else if (current_page == PAGE_CATS && is_letter_grid())
                 {
-                    // Letter grid: step up one row (= -LETTER_GRID_COLS).
-                    if (cursor >= LETTER_GRID_COLS)
+                    // Letter grid: step up one row (= -LETTER_GRID_COLS),
+                    // skipping empty (zero-count) letters.
+                    int target = find_next_letter(cursor, -LETTER_GRID_COLS);
+                    if (target >= 0)
                     {
                         int old = cursor;
-                        cursor -= LETTER_GRID_COLS;
+                        cursor = target;
                         update_letter_grid_cursor(old, cursor);
                     }
                 }
@@ -1789,11 +1815,13 @@ int main(void)
                 }
                 else if (current_page == PAGE_CATS && is_letter_grid())
                 {
-                    // Letter grid: step down one row (= +LETTER_GRID_COLS).
-                    if (cursor + LETTER_GRID_COLS < item_count)
+                    // Letter grid: step down one row (= +LETTER_GRID_COLS),
+                    // skipping empty (zero-count) letters.
+                    int target = find_next_letter(cursor, LETTER_GRID_COLS);
+                    if (target >= 0)
                     {
                         int old = cursor;
-                        cursor += LETTER_GRID_COLS;
+                        cursor = target;
                         update_letter_grid_cursor(old, cursor);
                     }
                 }
@@ -1808,27 +1836,32 @@ int main(void)
             case 'l':  // Grid left (letter grid only)
                 if (current_page == PAGE_CATS && is_letter_grid())
                 {
-                    if (cursor % LETTER_GRID_COLS == 0)
+                    // Skip empty cells in the same row; "wall bump" once we
+                    // run off column 0.
+                    int target = find_next_letter(cursor, -1);
+                    if (target < 0 || target / LETTER_GRID_COLS != cursor / LETTER_GRID_COLS)
                     {
-                        // Left edge: "wall bump" exits the grid back to its
-                        // parent menu, mirroring how DEL behaves.
                         go_back();
                     }
                     else
                     {
                         int old = cursor;
-                        cursor--;
+                        cursor = target;
                         update_letter_grid_cursor(old, cursor);
                     }
                 }
                 break;
 
             case 'r':  // Grid right (letter grid only)
-                if (current_page == PAGE_CATS && is_letter_grid() && cursor + 1 < item_count)
+                if (current_page == PAGE_CATS && is_letter_grid())
                 {
-                    int old = cursor;
-                    cursor++;
-                    update_letter_grid_cursor(old, cursor);
+                    int target = find_next_letter(cursor, 1);
+                    if (target >= 0 && target / LETTER_GRID_COLS == cursor / LETTER_GRID_COLS)
+                    {
+                        int old = cursor;
+                        cursor = target;
+                        update_letter_grid_cursor(old, cursor);
+                    }
                 }
                 break;
 

@@ -14,13 +14,28 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-// Hardware registers for Ultimate II+ Command Interface
+// Hardware registers for Ultimate II+ Command Interface.
+//
+// Default mapping is $DF1C-$DF1F (I/O 2). When we run as a subtype-1
+// "REU-aware EasyFlash" cart, EasyFlash claims all of $DF00-$DFFF and
+// the Ultimate firmware relocates UCI to $DE1C-$DE1F (I/O 1) — the
+// CART_UCI_DE1C flag in GideonZ/1541ultimate (commit 8e92e6d). Reading
+// the old $DF1C addresses returns open-bus 0xFF and uci_identify hangs.
+#ifdef OSCAR_TARGET_CRT_EASYFLASH
+#define UCI_CONTROL_REG    ((volatile uint8_t*)0xDE1C)
+#define UCI_STATUS_REG     ((volatile uint8_t*)0xDE1C)
+#define UCI_CMD_DATA_REG   ((volatile uint8_t*)0xDE1D)
+#define UCI_ID_REG         ((volatile uint8_t*)0xDE1D)
+#define UCI_RESP_DATA_REG  ((volatile uint8_t*)0xDE1E)
+#define UCI_STATUS_DATA_REG ((volatile uint8_t*)0xDE1F)
+#else
 #define UCI_CONTROL_REG    ((volatile uint8_t*)0xDF1C)
 #define UCI_STATUS_REG     ((volatile uint8_t*)0xDF1C)
 #define UCI_CMD_DATA_REG   ((volatile uint8_t*)0xDF1D)
 #define UCI_ID_REG         ((volatile uint8_t*)0xDF1D)
 #define UCI_RESP_DATA_REG  ((volatile uint8_t*)0xDF1E)
 #define UCI_STATUS_DATA_REG ((volatile uint8_t*)0xDF1F)
+#endif
 
 // Control register bits
 #define UCI_CTRL_PUSH_CMD   0x01

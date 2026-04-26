@@ -26,11 +26,10 @@
 // Important Ultimate caveat: builds with `-tf=crt` *must* also pass
 // `-csub=1` (REU-aware EasyFlash subtype 1). Subtype 0 makes the
 // Ultimate firmware claim all of $DF00-$DFFF for emulated cart RAM,
-// which hides the UCI registers at $DF1C-$DF1F and uci_identify()
-// hangs forever. Subtype 1 leaves $DF00-$DF1F untouched. The EF
-// target is currently a build-and-boot artifact only; on C64 Ultimate
-// firmware 1.1.0 UCI access from inside an EF cart is still
-// unreliable, so the .prg target remains the recommended deployment.
+// hides the UCI registers at $DF1C-$DF1F, and uci_identify() hangs
+// forever. With subtype 1 the firmware *relocates* UCI to $DE1C-$DE1F
+// (I/O 1) — not unmaps it; the registers move. ultimate.h picks the
+// right addresses based on OSCAR_TARGET_CRT_EASYFLASH.
 #ifdef OSCAR_TARGET_CRT_EASYFLASH
 #pragma region(main, 0x0900, 0x8000, , , {code, data, bss, heap, stack})
 #endif
@@ -1505,12 +1504,20 @@ int main(void)
     // Without this explicit init the C64's video output stays black even
     // though screen RAM at $0400 holds the right characters.
     //   $D011 = 0x1B : display on, text mode, 25 rows, default Y-scroll
+    //   $D015 = 0x00 : disable all sprites (KERNAL would zero this; cart
+    //                  boot doesn't, and the Ultimate's pre-launch state
+    //                  has left sprite 0 enabled with its pointer at
+    //                  $07F8 → sprite data at $0800-$083F, which is our
+    //                  oscar64 relocated-startup region. VIC renders
+    //                  those bytes as a 24x21 "QR-code" block in the
+    //                  middle of the screen.)
     //   $D016 = 0xC8 : 40 cols, multicolor off, default X-scroll
     //   $D018 = 0x14 : screen at $0400, charset at $1000
     //   $DD00 = 0x97 : VIC bank 0 ($0000-$3FFF)
     *((volatile byte *)0xDD00) = 0x97;
     *((volatile byte *)0xD018) = 0x14;
     *((volatile byte *)0xD016) = 0xC8;
+    *((volatile byte *)0xD015) = 0x00;
     *((volatile byte *)0xD011) = 0x1B;
 
     // Initialize menu state

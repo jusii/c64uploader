@@ -327,16 +327,12 @@ The fix is the canonical EasyFlash layout from oscar64's `samples/memmap/easyfla
 
 This stretches the RAM region to 30 KB (everything below the cart at $8000). The boot stub LZ-compresses this region into cart bank 0 ROM and decompresses it back into RAM at startup, so code/data/BSS/heap/stack all live in RAM after boot — same shape as PRG, just delivered through a cart. PRG and CRT16 builds use oscar64's auto-configured regions and ignore the pragma.
 
-**2. CRT subtype 1 ("REU-aware EasyFlash").** With the pragma in place the cart links and boots — the title bar renders correctly, main() runs — but `uci_identify()` spins forever because reads from `$DF1C` return open-bus `$FF`. The reason: standard EasyFlash carts (CRT subtype 0) reserve $DF00-$DFFF as 256 bytes of cart RAM, which collides with the Ultimate's UCI registers at $DF1C-$DF1F. From firmware 3.10 onward the Ultimate II+ auto-disables UCI whenever the active cart claims I/O 2; the C64 Ultimate behaves the same way. The cure is the EasyFlash hardware sub-type byte at CRT header offset 0x1A:
+**2. CRT subtype 1 + UCI relocation.** With the pragma in place the cart links and boots — the title bar renders correctly, main() runs — but `uci_identify()` spins forever because reads from `$DF1C` return open-bus `$FF`. Two pieces in play:
 
-- subtype 0 — "Standard EasyFlash" — uses $DF00-$DF1F → UCI disabled.
-- subtype 1 — "REU-aware EasyFlash" — leaves $DF00-$DF1F alone → UCI stays available.
+- Standard EasyFlash carts (CRT subtype 0) reserve $DF00-$DFFF as 256 bytes of cart RAM. This collides with the Ultimate's default UCI mapping at $DF1C-$DF1F, and the firmware auto-disables UCI for the cart's lifetime. Cure: the EasyFlash hardware sub-type byte at CRT header offset 0x1A. Subtype 1 ("REU-aware EasyFlash") tells the firmware the ROM image will not touch $DF00-$DFFF. oscar64 supports a `-csub=1` flag that writes the subtype byte.
+- With subtype 1 the Ultimate firmware does not "leave UCI alone at $DF1C" — it **relocates UCI to $DE1C-$DE1F** (I/O 1). The cart still owns all of I/O 2; UCI moves to I/O 1, where EasyFlash's $DE00/$DE02 bank-control registers don't extend up to $DE1C. The relevant flag in firmware ([GideonZ/1541ultimate commit 8e92e6d](https://github.com/GideonZ/1541ultimate/commit/8e92e6dbd5b152c80112b83a5b283e6feb984a2d)) is literally named `CART_UCI_DE1C`. This relocation isn't called out in the user-facing docs; the trail leads through the [Zak McKracken / Ultimate-64 forum64.de thread](https://www.forum64.de/index.php?thread/154897-zak-mckracken-st%C3%BCrzt-auf-dem-ultimate64-ab/=&pageNo=4).
 
-oscar64 supports a `-csub=1` flag that writes the subtype byte. The Makefile's `ef` target sets it.
-
-**Caveat.** With `-tf=crt -csub=1` the cart still hits the UCI hang on the test C64 Ultimate (firmware 1.1.0); the firmware appears not to honor subtype 1 the way the Ultimate II+ documentation describes. Empirically the .prg target is the working deployment; the `ef` target stays in the tree so the build path doesn't bit-rot and so the linker fix is documented in code.
-
-Larger cart formats that bank only on $DE00 (Magic Desk, Ocean, GMod2) would sidestep the I/O 2 conflict entirely but are not supported by oscar64's built-in linker — they'd need a manually-constructed cart image or oscar64 patches.
+`ultimate.h` defines the UCI register addresses conditional on `OSCAR_TARGET_CRT_EASYFLASH` so the same `ultimate.c` compiles for both the .prg/CRT16 case (UCI at $DF1C) and the EF case (UCI at $DE1C). The cart now reaches the server, navigates menus, and exercises the full UCI surface on the test C64 Ultimate (firmware 1.1.0).
 
 ## Configuration
 

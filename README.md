@@ -2,6 +2,12 @@
 
 Remotely upload and run programs on Commodore 64 Ultimate via its [REST API](https://1541u-documentation.readthedocs.io/en/latest/api/api_calls.html).
 
+Three ways to browse your Assembly64 collection, all backed by the same Go server and SQLite index:
+
+- **a64browser cart on the C64 itself.** A native EasyFlash cartridge image (`a64browser.crt`) that runs on the C64 Ultimate. Set it as the default cart in firmware config and the C64 boots straight into the browser on power-on — search, drill into Games/Demos/Music/…, hit Return to load and run. **F7** cleanly drops back to BASIC. No PC interaction needed once the server is running on your network.
+- **Mobile web UI on your phone.** Open `http://<server>:8000/` in a phone browser for the same hierarchy as the cart, with thumb-friendly tap targets and instant search. Tap an entry → it launches on the C64.
+- **Stock firmware Assembly64 browser.** Point the Ultimate's built-in browser at your local server (Spiffy-compatible HTTP API) and it works against your offline mirror instead of `assembly64.com`.
+
 > [!NOTE]
 > This code was generated with AI coding assistant and is not thoroughly tested or reviewed.
 

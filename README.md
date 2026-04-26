@@ -17,7 +17,7 @@ This project consists of two components:
 A command-line tool that runs on your PC and communicates with the C64 Ultimate via its REST API. It provides multiple modes of operation:
 
 - **TUI Mode** - Interactive terminal UI for browsing and running programs from a local Assembly64 collection
-- **Load Mode** - Upload and run individual files (PRG, CRT, D64, etc.) from local paths or remote URLs
+- **Load Mode** - Upload and run individual files (PRG, CRT, D64, SID, etc.) from local paths or remote URLs
 - **FTP Mode** - Transfer files to the C64 Ultimate's filesystem via FTP
 - **Poke Mode** - Modify C64 memory addresses (useful for cheats and memory tricks)
 - **Server Mode** - Host a lightweight protocol server for the C64 client application, with an optional Spiffy-compatible HTTP API so the Ultimate firmware's stock Assembly64 browser can use this server as its upstream
@@ -75,7 +75,7 @@ Press `/` to open an advanced search form with filters for:
 
 ### Load Mode
 
-Upload and run a specific file (PRG, CRT, D64, etc.) from a local path or remote URL:
+Upload and run a specific file (PRG, CRT, D64, SID, etc.) from a local path or remote URL:
 
 ```bash
 ./c64uploader load [options] <filename|url>

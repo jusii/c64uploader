@@ -242,14 +242,14 @@ Press any key to return to the previous screen.
 
 ### Running Programs
 
-When you press Return on an entry:
-1. The server uploads the file to your Ultimate II+
-2. The program is automatically executed
-3. Different file types are handled appropriately:
-   - **PRG**: Loaded and run directly
-   - **D64/G64/D71/D81**: Disk mounted, first program auto-loaded
-   - **CRT**: Cartridge mounted
-   - **SID**: Music played via Ultimate's SID player
+When you press Return on an entry, the server uploads the file to your Ultimate via its REST API and dispatches by extension:
+
+| Type | Action |
+|------|--------|
+| **PRG** | Loaded and run directly (`/v1/runners:run_prg`) |
+| **CRT** | Cartridge mounted (`/v1/runners:run_crt`) |
+| **D64/G64/D71/D81/G71** | Disk mounted, first program auto-loaded (`/v1/runners:mount_d64`) |
+| **SID** | Played via the Ultimate's sandboxed SID player (`/v1/runners:sidplay`) — tune only, no demo graphics |
 
 ### Tips
 

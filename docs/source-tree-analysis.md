@@ -16,18 +16,22 @@ c64uploader/
 │   ├── d64.go                   # D64/G64 disk image parser
 │   ├── dbgen_sqlite.go          # SQLite database generator
 │   ├── debug.go                 # Remote debug subcommand (screen peek, key inject, scroll-rate, peek)
+│   ├── spiffy.go                # Spiffy-compatible HTTP API (/leet/search/) for the
+│   │                            #   Ultimate firmware's stock Assembly64 browser
 │   ├── scanner.go               # Filesystem scanner used by dbgen
 │   ├── testclient.go            # Scratch TCP client for protocol debugging (`// +build ignore`)
 │   ├── go.mod                   # Go module definition
 │   ├── go.sum                   # Dependency checksums
-│   └── C64PROTOCOL.md           # Protocol specification
+│   ├── C64PROTOCOL.md           # Protocol specification (TCP line protocol)
+│   └── SPIFFY_HTTP_API.md       # HTTP API spec served by spiffy.go
 │
 ├── c64client/                   # Native C64 application
 │   ├── src/
-│   │   ├── main.c               # Main application (~2330 LOC)
+│   │   ├── main.c               # Main application
 │   │   ├── ultimate.c           # UCI library implementation
 │   │   └── ultimate.h           # UCI library header
-│   ├── build/                   # Compiled output (PRG, CRT, D64)
+│   ├── build/                   # Compiled output (gitignored)
+│   ├── dist/                    # Prebuilt PRG + EasyFlash CRT (tracked)
 │   ├── Makefile                 # Build system
 │   └── README.md                # Client documentation
 │

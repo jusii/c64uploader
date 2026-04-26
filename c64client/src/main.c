@@ -1985,13 +1985,53 @@ int main(void)
                 }
                 break;
 
-            case 0x18:  // F7 - exit by handing control to the Ultimate menu.
-                // The cart can't disable itself in software, but the
-                // Ultimate's firmware menu lets the user remove the
-                // cartridge or reset cleanly. Same as pressing the
-                // physical menu button on the device.
+            case 0x18:  // F7 - exit to BASIC (EF) / Ultimate menu (PRG).
                 disconnect_from_server();
+#ifdef OSCAR_TARGET_CRT_EASYFLASH
+                // Disable the cart and jump straight to KERNAL_RESET.
+                // The full KERNAL cold-start path runs (IOINIT, CIA
+                // setup, RAMTAS, RESTOR, CINT, then JMP ($A000) →
+                // BASIC cold-start) and lands on the standard banner
+                // + READY prompt — the same end state as a hardware
+                // reset. Earlier attempts to do partial resets (CINT
+                // + BASIC NEW) printed "READY." but left the system
+                // in a fragile state; subsequent F7 keypresses or
+                // KERNAL/JiffyDOS interactions could hang. Going
+                // through the full $FCE2 path makes the system
+                // indistinguishable from a fresh boot.
+                //
+                //  $DE02 ← $04   Disable the EasyFlash. On the C64
+                //                Ultimate firmware (1.1.0) this is
+                //                the only $DE02 value that actually
+                //                hides the cart at $8000-$BFFF and
+                //                $E000-$FFFF — the spec-standard
+                //                $87 leaves the cart mapped at
+                //                $8000-$BFFF on this firmware.
+                //                Verified by walking $DE02 across
+                //                $00..$87 and reading the cart
+                //                signature at $8000.
+                //
+                //                IMPORTANT: only works when the
+                //                firmware's ACIA modem mapping is
+                //                "Off". With the default DE00/NMI
+                //                SwiftLink, $DE02 writes are
+                //                intercepted by the ACIA command
+                //                register and never reach EF.
+                //  JMP $FCE2    KERNAL cold-reset entry. Everything
+                //                else (CIA init, $0001, screen,
+                //                vectors, banner) is handled by
+                //                KERNAL exactly as on a real reset
+                //                because the cart is truly hidden
+                //                from the bus by the time KERNAL
+                //                starts reading from $E000.
+                __asm {
+                    lda #0x04
+                    sta 0xDE02
+                    jmp 0xFCE2
+                }
+#else
                 uci_pop_ultimate_menu();
+#endif
                 break;
 
             case 8:  // Backspace

@@ -334,6 +334,22 @@ This stretches the RAM region to 30 KB (everything below the cart at $8000). The
 
 `ultimate.h` defines the UCI register addresses conditional on `OSCAR_TARGET_CRT_EASYFLASH` so the same `ultimate.c` compiles for both the .prg/CRT16 case (UCI at $DF1C) and the EF case (UCI at $DE1C). The cart now reaches the server, navigates menus, and exercises the full UCI surface on the test C64 Ultimate (firmware 1.1.0).
 
+**3. F7 exit-to-BASIC.** Software-disabling the cart from inside it took two firmware-specific gotchas to get right; the published EasyFlash spec doesn't reflect what the C64 Ultimate firmware 1.1.0 actually implements:
+
+- **ACIA modem mapping must be Off.** When the firmware's `Modem Settings → ACIA (6551) Mapping` is `DE00/NMI` (the default), the SwiftLink/ACIA emulation claims `$DE00-$DE07` and intercepts every write — including the `$DE02` bank-control writes EasyFlash needs. The cart-disable silently goes to the ACIA command register and the EF stays mapped. Set `ACIA (6551) Mapping = Off` in firmware config before running the EF cart, or `make runef` is a no-op for exit purposes.
+- **The kill value is `$04`, not `$87`.** The published EF spec says writing `$87` to `$DE02` (mode + `!EXROM=1` + `!GAME=1` + LED) hides the cart. On this firmware, `$87` keeps the cart visible at `$8000-$BFFF`. The only value (out of `$00..$87` walked empirically) that hides the cart at both `$8000` and `$E000` is `$04` — bit 2 alone, every other bit zero. The screen probe routine (in commit history) reads `$8000` after each candidate and shows that `$04` is the unique winner.
+
+With those two pieces in place, the exit sequence is just three instructions:
+
+```
+LDA #$04 / STA $DE02   ; cart goes away
+JMP $FCE2              ; full KERNAL cold-reset — IOINIT, RAMTAS,
+                       ; RESTOR, CINT, then JMP ($A000) → BASIC
+                       ; cold-start banner + "READY." prompt
+```
+
+The full `$FCE2` path runs every initialization a hardware reset would, leaving the system indistinguishable from a fresh boot. Earlier intermediate attempts (`CINT + BASIC NEW`, `BASIC cold-start $E394`) appeared to work on the first F7 — printing "READY." — but left the system in a fragile state where a subsequent F7 keypress at the BASIC prompt could hang or corrupt the screen, because zero page, IRQ vectors, or `$0001` were not fully reinitialized. Going through `$FCE2` from a properly-disabled-cart starting state fixes that. The earlier `JMP $FCE2` attempts hung only because the previous EF disable value (`$87`) hadn't actually hidden the cart, so KERNAL was reading garbage from `$E000` on a cart still mapped to Ultimax. With `$04` the cart is genuinely off-bus before KERNAL starts.
+
 ## Configuration
 
 **Compile-time defaults (main.c):**

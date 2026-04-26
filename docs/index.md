@@ -31,7 +31,7 @@
 
 ### Go Server (uploader)
 
-- **Tech Stack:** Go 1.26, Bubbletea, Lipgloss, modernc.org/sqlite
+- **Tech Stack:** Go 1.25, Bubbletea, Lipgloss, modernc.org/sqlite
 - **Entry Point:** `uploader/main.go`
 - **Commands:** `tui`, `server`, `load`, `ftp`, `poke`, `sqlitegen`, `debug`
 - **Architecture:** CLI with subcommands + TCP protocol server + HTTP-driven remote debug channel

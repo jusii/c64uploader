@@ -265,7 +265,7 @@ The `a64browser` is a native C64 application located in the `c64client/` directo
 4. On startup:
    - The browser checks the Ultimate, captures the firmware ID and IP, then loads `/flash/config/a64browser.cfg`.
    - If the saved `AUTOSTART` flag is on, it connects silently and lands on the root menu. Otherwise (or on connect failure) it shows the **config screen** with the error in the status bar.
-   - **F1** opens the config screen at any time; **F7** disconnects and pops the Ultimate menu.
+   - **F1** opens the config screen at any time. **F7** exits — pops the Ultimate menu on the .prg target, drops to BASIC on the EasyFlash cart.
 
 ### Config Screen
 
@@ -300,7 +300,7 @@ The settings file is a plain three-line text file: `host\nport\nautostart\n` whe
 - **Return** or right arrow - Enter category
 - **/** - Search mode (from root)
 - **F1** - Config screen
-- **F7** - Exit (disconnect and pop the Ultimate menu)
+- **F7** - Exit (PRG: pop Ultimate menu; EasyFlash: drop to BASIC)
 
 When a category menu includes `BROWSE A-Z`, selecting it opens a **27-cell letter grid** (A..Z plus `#` for titles that don't start with a letter). The grid has its own navigation:
 - **W/S** or cursor up/down - Move between grid rows (9 cells per row)
@@ -317,18 +317,13 @@ When a category menu includes `BROWSE A-Z`, selecting it opens a **27-cell lette
 - **right arrow** - Open Releases for entries with multiple versions
 - **DEL** or left arrow - Back to parent menu
 
-**Search mode:**
-- Type to search (minimum 2 characters)
-- **C=** - Cycle category filter (All/Games/Demos/Music)
-- **Return** - Run selected result
-- **I** - View entry info
-- **DEL** - Delete character or exit search
-
-**Advanced search (press `/` from categories):**
-- **W/S** - Navigate fields
-- **Space** - Toggle/cycle option fields
-- **Return** - Edit text field or execute search
-- **DEL** - Delete character (in edit) or back to categories
+**Search mode (`/` from root):**
+- Type to build a query (minimum 3 characters)
+- **Tab** - Cycle category filter (All/Games/Demos/Music)
+- **Return** or cursor down - Run the search and switch focus to the result list
+- **Cursor up** at the top of the results (or **DEL**) - Return to the input box, query preserved
+- **I** - View entry info from the result list
+- **DEL** in the input box - Delete a character, or exit to categories when empty
 
 **Config screen (F1 from anywhere):**
 - **W/S** - Navigate fields

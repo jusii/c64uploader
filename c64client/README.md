@@ -24,13 +24,9 @@ make ef
 make d64
 ```
 
-`make crt` adds `-tf=crt16` (16 KB autostart cart). `make ef` adds
-`-tf=crt -csub=1` (EasyFlash with REU-aware subtype). `-dNOFLOAT` is on
-by default — we never format floats, and dropping the oscar64
-float-printf helpers saves ~1.6 KB. The .prg is the supported
-deployment; see [docs/architecture-c64client.md](../docs/architecture-c64client.md#easyflash--tfcrt-build-target)
-for why the EasyFlash target builds and boots but currently can't reach
-the UCI on C64 Ultimate firmware 1.1.0.
+`make crt` adds `-tf=crt16` (16 KB autostart cart — currently overflows the slot since the unified config screen + autostart logic landed; left in the Makefile for size tracking). `make ef` adds `-tf=crt -csub=1` (EasyFlash, REU-aware subtype 1). `-dNOFLOAT` is on by default — we never format floats, and dropping the oscar64 float-printf helpers saves ~1.6 KB. Both `.prg` and `.crt` (EasyFlash) are supported deployments; the EasyFlash variant requires the firmware setting `Modem Settings → ACIA (6551) Mapping = Off`. See [docs/architecture-c64client.md](../docs/architecture-c64client.md#easyflash--tfcrt-build-target) for the full investigation.
+
+Prebuilt binaries are committed under [dist/](dist/) so users can deploy without installing oscar64.
 
 ### Notes on the cart variants
 
@@ -56,23 +52,24 @@ the UCI on C64 Ultimate firmware 1.1.0.
 make run                # launches x64sc with the .prg
 ```
 
-### On real hardware — three options
+### On real hardware
 
 ```bash
-# 1. Upload the .prg to the Ultimate's filesystem and load it from BASIC
+# Upload the .prg to the Ultimate's filesystem and load it from BASIC
 U2P_HOST=192.168.1.x make deploy
 
-# 2. Run the .prg directly via the Ultimate REST API (one-shot)
+# Run the .prg directly via the Ultimate REST API (one-shot)
 U2P_HOST=192.168.1.x make runprg
 
-# 3. Run the .crt as a cartridge via the Ultimate REST API
-U2P_HOST=192.168.1.x make runcrt
+# Run the EasyFlash .crt directly via the Ultimate REST API
+U2P_HOST=192.168.1.x make runef
 
-# Equivalent to #3 using the c64uploader CLI
-./c64uploader load -host <ultimate-ip> build/a64browser.crt
+# Or use the prebuilt binaries with the c64uploader CLI:
+./c64uploader load -host <ultimate-ip> dist/a64browser.prg
+./c64uploader load -host <ultimate-ip> dist/a64browser-ef.crt
 ```
 
-The cartridge form factor is what you want if you ever flash an
+The EasyFlash form factor is what you want if you ever flash a real
 EasyFlash / KFF / similar — the C64 boots straight into the browser
 on power-on with no PC involvement.
 
@@ -84,7 +81,8 @@ c64client/
 │   ├── main.c        - Main client application
 │   ├── ultimate.h    - Ultimate II+ library header
 │   └── ultimate.c    - Ultimate II+ library (ported from cc65)
-├── build/            - Output directory
+├── build/            - Build output (gitignored)
+├── dist/             - Prebuilt artifacts (a64browser.prg, a64browser-ef.crt)
 ├── Makefile
 └── README.md
 ```
@@ -140,7 +138,7 @@ IP: 192.168.2.64
 | **Return** on `.CONNECT.` | Connect with current in-memory values (does not write to disk) |
 | **Return** on `.SAVE.` | Write the config file and connect |
 | **F1** | Open config from any other page |
-| **F7** | Exit — disconnect and pop the Ultimate menu |
+| **F7** | Exit — pops the Ultimate menu on the .prg target, drops to BASIC on the EasyFlash cart |
 
 The config file is plain text:
 ```
@@ -162,7 +160,7 @@ Once connected, you land on the root category list (`ASSEMBLY64 - CATEGORIES`). 
 | **DEL / cursor left** | Back to parent menu |
 | **/** | Open search (from root) |
 | **F1** | Open config screen |
-| **F7** | Exit (disconnect and pop the Ultimate menu) |
+| **F7** | Exit — pops the Ultimate menu on .prg, drops to BASIC on EasyFlash |
 
 The tree is: **Category → Source → [Browse A-Z, Top 200, Top 500, ...]**, e.g. `Games → CSDB → Browse A-Z`.
 

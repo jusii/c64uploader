@@ -183,18 +183,8 @@ while (uci_tcp_nextline(socket, buffer) > 0) {
 ## User Interface
 
 ### Main Menu
-```
-┌──────────────────────────────────┐
-│ ASSEMBLY64 BROWSER               │
-├──────────────────────────────────┤
-│ 1. Browse Categories             │
-│ 2. Search                        │
-│ 3. Advanced Search               │
-│ 4. Settings                      │
-│                                  │
-│ Q. Quit                          │
-└──────────────────────────────────┘
-```
+
+There is no numbered "main menu" — the root page is the live category list loaded from the server's `MENU` command (`Games`, `Demos`, `Music`, `Intros`, `Graphics`, `Discmags`, `My Files`). The first screen on a fresh install is the [config screen](#configuration), reached again with F1 from anywhere.
 
 ### Navigation Keys
 
@@ -208,10 +198,10 @@ while (uci_tcp_nextline(socket, buffer) > 0) {
 | Return | Select / Run / drill | Enter the selected letter's list |
 | N / P | Next / previous page (list only) | - |
 | I | Show info (list only) | - |
-| / | Advanced search (root only) | - |
-| C | Settings (root only) | - |
+| / | Open simple typed-query search | Open simple typed-query search |
+| F1 | Config screen | Config screen |
+| F7 | Exit (pops Ultimate menu on .prg, drops to BASIC on EF) | Same as left column |
 | DEL | Back | Back |
-| Q | Quit (root only) | - |
 
 ### Letter Grid Mode
 
@@ -292,7 +282,8 @@ make runcrt   # Execute cartridge via REST API
 - `-O2` - Optimization level 2
 - `-tm=c64` - Target machine: Commodore 64
 - `-dNOFLOAT` - Drop oscar64's float-printf helpers (we never format floats; saves ~1.6 KB)
-- `-tf=crt16` - 16 KB autostart cartridge image (cart build only)
+- `-tf=crt16` - 16 KB autostart cartridge image (CRT16; currently overflows the 16 KB slot)
+- `-tf=crt -csub=1` - EasyFlash cartridge image, REU-aware subtype 1 (`make ef`)
 
 ### Cart-target constraints
 
@@ -309,11 +300,11 @@ The CRT16 build runs as a 16 KB autostart cartridge mapped at `$8000-$BFFF`. Two
 
 The .prg variant uses the regular C64 boot path where the KERNAL initializes both the data segment and the VIC; the same source code runs identically in both.
 
-The CRT16 build currently exceeds the 16 KB slot (~16.5 KB) since the unified config screen and autostart logic landed; the .prg target is the supported deployment for now.
+The CRT16 build currently exceeds the 16 KB slot (~16.5 KB) since the unified config screen and autostart logic landed. The supported cartridge target is now the EasyFlash variant (`make ef`); both `.prg` and EasyFlash `.crt` are shipped in [`c64client/dist/`](../c64client/dist/).
 
 ### EasyFlash (`-tf=crt`) build target
 
-`make ef` builds an EasyFlash cartridge image (`a64browser-ef.crt`). It links and boots correctly, but UCI access from inside the cart is not reliable on C64 Ultimate firmware 1.1.0 — see the caveat at the end. The build itself required two fixes that are worth understanding:
+`make ef` builds an EasyFlash cartridge image (`a64browser-ef.crt`). It links, boots, and the full UCI surface works; F7 cleanly drops to BASIC. Getting there required three firmware-specific gotchas that aren't in the published EasyFlash spec or the user-facing Ultimate docs:
 
 **1. RAM region sizing.** Out of the box `-tf=crt` fails with `error 3034: Could not place object 'X'  Size N Available 0 in section 'bss'` for every static, plus `Cannot place stack section` / `Cannot place heap section`. The errors look like a "BSS conflict" but really mean the entire `main` region is exhausted. oscar64's auto-config gives the EasyFlash format the same 16 KB region as PRG (`0x0900-0x4700`); a ~17 KB binary doesn't fit, and the linker reports it section by section.
 

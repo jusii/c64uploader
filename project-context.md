@@ -52,17 +52,9 @@ Menu items have a type code that determines navigation behavior:
 - `F` = file inside MYFILES (execute with RUNFILE)
 - `b` = legacy browse (older servers used this for Browse A-Z; current client still accepts it, but the server no longer emits `b`)
 
-### Stack-Based Navigation
+### Path-Trimming Back Navigation
 
-The C64 client uses a stack for back navigation:
-```c
-#define MAX_PATH_DEPTH 8
-static char menu_stack[MAX_PATH_DEPTH][48];
-static int menu_depth = 0;
-
-void push_path(const char *path);
-const char *pop_path(void);
-```
+The C64 client has no stack — `menu_path` IS the history. Going back trims the last `/`-separated component and reloads that parent menu (`go_back()` / `trim_path()`). Removes a class of "stack-and-path-out-of-sync" bugs and keeps RAM use tiny.
 
 ## File Organization
 
@@ -71,14 +63,17 @@ uploader/
   main.go           # CLI entry point, subcommands
   server_sqlite.go  # SQLite-based protocol server
   db.go             # SQLite schema and queries
-  dbgen.go          # Helper functions for database generation
   dbgen_sqlite.go   # SQLite database generation
-  apiclient.go      # C64 Ultimate REST API client
+  apiclient.go      # C64 Ultimate REST API client (incl. ReadMemory/WriteMemory)
+  debug.go          # `debug` subcommand: screen peek, key inject, memory dump
+  tui.go            # Bubbletea TUI
 
 c64client/
   src/main.c        # Main client application
-  src/ultimate.c/h  # Ultimate II+ network library
-  Makefile          # Build: make prg/crt/d64
+  src/ultimate.c/h  # Ultimate II+ network library (UCI; addresses
+                    # conditional on OSCAR_TARGET_CRT_EASYFLASH)
+  Makefile          # Build: make prg / crt / ef / d64
+  dist/             # Prebuilt a64browser.prg + a64browser-ef.crt
 ```
 
 ## Database: SQLite
@@ -105,6 +100,7 @@ See `docs/sqlite-database-schema.md` for full schema.
 | SEARCH offset count [cat] query | Text search |
 | INFO id | Entry details |
 | RUN id | Execute entry on C64 |
+| RUNFILE path | Execute a file under MYFILES by path |
 | RELEASES offset count path title | All releases of a title |
 | QUIT | Close connection |
 
@@ -120,10 +116,15 @@ cd uploader && go build -o c64uploader
 **C64 Client:**
 ```bash
 cd c64client
-make prg    # Build .prg file
-make crt    # Build cartridge (auto-start)
-make deploy # FTP upload to Ultimate (needs U2P_HOST env)
+make prg     # Build .prg
+make crt     # Build CRT16 (currently overflows the 16 KB slot)
+make ef      # Build EasyFlash .crt (REU-aware subtype 1)
+make deploy  # FTP upload .prg to Ultimate (needs U2P_HOST env)
+make runprg  # Run .prg via REST API
+make runef   # Run EasyFlash .crt via REST API
 ```
+
+Prebuilt `a64browser.prg` and `a64browser-ef.crt` are committed under `c64client/dist/` so users can deploy without installing oscar64.
 
 **Compiler:** oscar64 (NOT cc65) - modern high-performance C64 C compiler
 
@@ -180,8 +181,8 @@ echo "LISTPATH 0 20 Games/CSDB A" | nc localhost 6465
 
 ## Known Issues / Debt
 
-1. FTP package unused but still in go.mod (originally for direct Assembly64 access)
-2. dbgen.go contains dead code (JSON generation functions) but helper functions are used by dbgen_sqlite.go
+1. FTP package (`github.com/jlaffaye/ftp`) used by the `ftp` subcommand and the `make deploy` target on the cart; not legacy.
+2. The legacy `dbgen.go` (JSON generator) has been removed; `dbgen_sqlite.go` is the only DB generator.
 
 ## Performance Notes
 

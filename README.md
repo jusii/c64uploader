@@ -192,6 +192,10 @@ The same daemon also runs our native cart's TCP line server on `-port` (default 
 
 When `-spiffy-http-port` is set, the same listener also serves a mobile-friendly single-page web UI at `/`. Point a phone's browser at `http://<host>:<port>/` and you get the same hierarchy the cart shows — categories → sources → Browse A-Z / Top 200 → entry lists → tap to run. PRG / CRT / D64 / SID launch through the C64 Ultimate's REST API exactly like the cart's run path.
 
+| Categories | Sources | Source menu | Letter grid | Entry list |
+|:---:|:---:|:---:|:---:|:---:|
+| <img src="screenshots/web-01-categories.png" alt="Categories" width="180"> | <img src="screenshots/web-02-sources.png" alt="Sources" width="180"> | <img src="screenshots/web-03-source-menu.png" alt="Source menu" width="180"> | <img src="screenshots/web-04-letter-grid.png" alt="A-Z letter grid" width="180"> | <img src="screenshots/web-05-entry-list.png" alt="Entry list with release/trainer badges" width="180"> |
+
 ```
 http://192.168.2.66:8000/    # phone-friendly browser UI
 http://192.168.2.66:8000/leet/search/aql/presets  # Spiffy API for stock firmware

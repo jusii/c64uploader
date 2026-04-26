@@ -61,6 +61,8 @@ func detectFileType(filename string) string {
 		return "g64"
 	case ".g71":
 		return "g71"
+	case ".sid":
+		return "sid"
 	default:
 		return ""
 	}
@@ -71,7 +73,7 @@ func uploadAndRunFile(client *APIClient, fileData []byte, filename string) error
 	// Detect file type.
 	fileType := detectFileType(filename)
 	if fileType == "" {
-		return fmt.Errorf("unsupported file type (supported: .prg, .crt, .d64, .d71, .d81, .g64, .g71)")
+		return fmt.Errorf("unsupported file type (supported: .prg, .crt, .d64, .d71, .d81, .g64, .g71, .sid)")
 	}
 
 	slog.Info("Detected file type", "type", fileType)
@@ -83,6 +85,8 @@ func uploadAndRunFile(client *APIClient, fileData []byte, filename string) error
 		return client.runCRT(fileData)
 	case "d64", "d71", "d81", "g64", "g71":
 		return client.runDiskImage(fileData, fileType, filepath.Base(filename))
+	case "sid":
+		return client.runSID(fileData)
 	default:
 		return fmt.Errorf("unsupported file type: %s", fileType)
 	}

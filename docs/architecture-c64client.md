@@ -205,7 +205,7 @@ while (uci_tcp_nextline(socket, buffer) > 0) {
 | cursor right (no shift) | Enter folder / open releases | Grid right (+1) |
 | cursor left (shift+right) | Back (in menus/lists) | Grid left (-1); wall-bump back at column 0 |
 | A / D (grid only) | - | Grid left / right |
-| Enter | Select / Run / drill | Enter the selected letter's list |
+| Return | Select / Run / drill | Enter the selected letter's list |
 | N / P | Next / previous page (list only) | - |
 | I | Show info (list only) | - |
 | / | Advanced search (root only) | - |

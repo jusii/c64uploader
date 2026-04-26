@@ -985,6 +985,7 @@ char get_key(void)
                 if (k == KSCAN_CSR_RIGHT && shift) return 'l';
                 if (k == KSCAN_A) return 'l';
                 if (k == KSCAN_D) return 'r';
+                if (k == KSCAN_SLASH) return '/';
             }
             else
             {
@@ -1223,7 +1224,7 @@ static void draw_letter_grid(const char *title)
     print_at_color(0, 0, title, 7);  // Yellow
     for (int i = 0; i < item_count; i++)
         draw_letter_cell(i, i == cursor);
-    print_at(0, 23, "arrows:move enter:sel del:back");
+    print_at(0, 23, "arrows return:sel /:srch del:back");
 }
 
 void draw_list(const char *title)
@@ -1279,15 +1280,15 @@ void draw_list(const char *title)
 
     // Help line
     if (current_page == PAGE_CATS)
-        print_at(0, 23, "w/s:move enter:sel /:srch f1:cfg f7:exit");
+        print_at(0, 23, "w/s return:sel /:srch f1:cfg f7:exit");
     else if (current_page == PAGE_LIST)
-        print_at(0, 23, "w/s:move enter:run >:rel i:info del:bk n/p:pg");
+        print_at(0, 23, "w/s return:run i:info del:bk >:rel n/p");
     else if (current_page == PAGE_SEARCH)
     {
         if (search_in_box)
-            print_at(0, 23, "type query  enter/down:search  del:back");
+            print_at(0, 23, "type query  return/down:srch  del:back");
         else
-            print_at(0, 23, "w/s:move enter:run i:info del:edit");
+            print_at(0, 23, "w/s return:run i:info del:edit");
     }
 }
 
@@ -1399,9 +1400,9 @@ void draw_settings(void)
     }
 
     if (settings_editing)
-        print_at(0, 23, "type value  enter:done  del:erase");
+        print_at(0, 23, "type value  return:done  del:erase");
     else
-        print_at(0, 23, "w/s:move enter:run/edit f7:exit");
+        print_at(0, 23, "w/s return:run/edit del:back f7:exit");
 }
 
 // Draw item for releases list with trainer count
@@ -1452,7 +1453,7 @@ void draw_releases(void)
     }
 
     // Help line at row 23
-    print_at(0, 23, "w/s:move enter:run i:info del:back n/p:pg");
+    print_at(0, 23, "w/s return:run i:info del:back n/p");
 }
 
 void draw_info(void)
@@ -1471,8 +1472,7 @@ void draw_info(void)
         print_at_color(10, y, info_values[i], 1);
     }
 
-    // Help line
-    print_at(0, 23, "press any key to return");
+    print_at(0, 23, "return:run any other key:back");
 }
 
 //-----------------------------------------------------------------------------
@@ -2084,6 +2084,19 @@ int main(void)
                 {
                     // Go back
                     go_back();
+                }
+                else if (current_page == PAGE_INFO)
+                {
+                    // DEL on info screen — return to entry list, same as
+                    // any other non-ENTER key. Goes through the same
+                    // path 'x' uses below.
+                    current_page = info_return_page;
+                    if (current_page == PAGE_LIST)
+                        draw_list(current_category);
+                    else if (current_page == PAGE_SEARCH)
+                        draw_list("assembly64 - search");
+                    else if (current_page == PAGE_RELEASES)
+                        draw_releases();
                 }
                 break;
 

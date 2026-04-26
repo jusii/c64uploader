@@ -51,7 +51,7 @@ Browse and upload files from local Assembly64 collection to C64 Ultimate using a
 **Controls:**
 - **↑/↓** - Navigate up/down
 - **Tab** - Cycle through categories
-- **Enter** - Load and run selected entry
+- **Return** - Load and run selected entry
 - **/** - Open advanced search
 - **Esc** - Clear search or quit
 - **Q** - Quit
@@ -246,10 +246,10 @@ The `a64browser` is a native C64 application located in the `c64client/` directo
 
 ### Running a64browser on C64
 
-1. Build the client (see [c64client/README.md](c64client/README.md)):
+1. Build the client, **or use the prebuilt binaries** in [c64client/dist/](c64client/dist/) (`a64browser.prg` and `a64browser-ef.crt`). Building requires oscar64 and is described in [c64client/README.md](c64client/README.md):
    ```bash
-   cd c64client && make prg crt
-   # produces build/a64browser.prg and build/a64browser.crt
+   cd c64client && make prg ef
+   # produces build/a64browser.prg and build/a64browser-ef.crt
    ```
 
 2. Start the protocol server on your PC:
@@ -258,8 +258,8 @@ The `a64browser` is a native C64 application located in the `c64client/` directo
    ```
 
 3. Launch the browser on your C64 Ultimate. Three ways:
-   - **PRG + load**: `./c64uploader load -host <ultimate-ip> build/a64browser.prg` — uploads and runs in one shot.
-   - **CRT cartridge**: `./c64uploader load -host <ultimate-ip> build/a64browser.crt` — same flow but the Ultimate runs it as a 16 KB autostart cartridge. Useful for fast cold-boot and the option to flash a real EasyFlash so the C64 powers up directly into the browser.
+   - **PRG + load**: `./c64uploader load -host <ultimate-ip> c64client/dist/a64browser.prg` — uploads and runs in one shot. Recommended.
+   - **EasyFlash CRT**: `./c64uploader load -host <ultimate-ip> c64client/dist/a64browser-ef.crt` — same flow but the Ultimate runs it as a REU-aware EasyFlash cartridge. Useful for fast cold-boot and the option to flash a real EasyFlash so the C64 powers up directly into the browser. Requires the firmware setting `Modem Settings → ACIA (6551) Mapping = Off` (the default `DE00/NMI` SwiftLink intercepts the cart's bank-control writes). F7 cleanly drops back to BASIC.
    - **FTP + manual launch**: copy the .prg to the Ultimate's filesystem and load it from BASIC.
 
 4. On startup:
@@ -285,10 +285,10 @@ IP: 192.168.2.64
 ```
 
 - **W/S** or cursor up/down — move between fields
-- **Enter** on `SERVER` / `PORT` — edit the value (Enter to commit)
+- **Return** on `SERVER` / `PORT` — edit the value (Return to commit)
 - **Space** on `AUTOSTART` — toggle YES / NO
-- **Enter** on `.CONNECT.` — connect with current values (does not save)
-- **Enter** on `.SAVE.` — write `/flash/config/a64browser.cfg` and connect
+- **Return** on `.CONNECT.` — connect with current values (does not save)
+- **Return** on `.SAVE.` — write `/flash/config/a64browser.cfg` and connect
 - **F7** — exit (back to Ultimate menu)
 
 The settings file is a plain three-line text file: `host\nport\nautostart\n` where `autostart` is `0` or `1`.
@@ -297,7 +297,7 @@ The settings file is a plain three-line text file: `host\nport\nautostart\n` whe
 
 **Category list (and letter grid):**
 - **W/S** or cursor up/down - Navigate rows (step by one in lists, step by a grid row in the A-Z grid)
-- **Enter** or right arrow - Enter category
+- **Return** or right arrow - Enter category
 - **/** - Search mode (from root)
 - **F1** - Config screen
 - **F7** - Exit (disconnect and pop the Ultimate menu)
@@ -305,13 +305,13 @@ The settings file is a plain three-line text file: `host\nport\nautostart\n` whe
 When a category menu includes `BROWSE A-Z`, selecting it opens a **27-cell letter grid** (A..Z plus `#` for titles that don't start with a letter). The grid has its own navigation:
 - **W/S** or cursor up/down - Move between grid rows (9 cells per row)
 - **Cursor left/right** or **A/D** - Move left/right within a row
-- **Enter** - Enter the selected letter's entry list
+- **Return** - Enter the selected letter's entry list
 - **Cursor left on column 0** (A, J, or S) - "Wall bump" back to the source menu
 - **DEL** - Back to the source menu
 
 **Entry list:**
 - **W/S** or cursor keys - Navigate up/down (auto-advances pages at top/bottom of visible list)
-- **Enter** - Run selected entry (or open Releases if the entry has multiple versions)
+- **Return** - Run selected entry (or open Releases if the entry has multiple versions)
 - **I** - View entry info (name, group, year, type, trainers)
 - **N/P** - Next/Previous page
 - **right arrow** - Open Releases for entries with multiple versions
@@ -320,19 +320,19 @@ When a category menu includes `BROWSE A-Z`, selecting it opens a **27-cell lette
 **Search mode:**
 - Type to search (minimum 2 characters)
 - **C=** - Cycle category filter (All/Games/Demos/Music)
-- **Enter** - Run selected result
+- **Return** - Run selected result
 - **I** - View entry info
 - **DEL** - Delete character or exit search
 
 **Advanced search (press `/` from categories):**
 - **W/S** - Navigate fields
 - **Space** - Toggle/cycle option fields
-- **Enter** - Edit text field or execute search
+- **Return** - Edit text field or execute search
 - **DEL** - Delete character (in edit) or back to categories
 
 **Config screen (F1 from anywhere):**
 - **W/S** - Navigate fields
-- **Enter** - Edit field, run action (`.CONNECT.` / `.SAVE.`)
+- **Return** - Edit field, run action (`.CONNECT.` / `.SAVE.`)
 - **Space** - Toggle `AUTOSTART`
 - **DEL** - Delete character (when editing) or back to previous page
 - Numbers and `.` - Enter IP address / port

@@ -135,10 +135,10 @@ IP: 192.168.2.64
 | Key | Action |
 |-----|--------|
 | **W / cursor up**, **S / cursor down** | Move between fields |
-| **Enter** on `SERVER` / `PORT` | Edit value (Enter again commits, DEL erases a character) |
+| **Return** on `SERVER` / `PORT` | Edit value (Return again commits, DEL erases a character) |
 | **Space** on `AUTOSTART` | Toggle YES / NO |
-| **Enter** on `.CONNECT.` | Connect with current in-memory values (does not write to disk) |
-| **Enter** on `.SAVE.` | Write the config file and connect |
+| **Return** on `.CONNECT.` | Connect with current in-memory values (does not write to disk) |
+| **Return** on `.SAVE.` | Write the config file and connect |
 | **F1** | Open config from any other page |
 | **F7** | Exit — disconnect and pop the Ultimate menu |
 
@@ -158,7 +158,7 @@ Once connected, you land on the root category list (`ASSEMBLY64 - CATEGORIES`). 
 |-----|--------|
 | **W / cursor up** | Move cursor up |
 | **S / cursor down** | Move cursor down |
-| **Enter / cursor right** | Enter category or folder |
+| **Return / cursor right** | Enter category or folder |
 | **DEL / cursor left** | Back to parent menu |
 | **/** | Open search (from root) |
 | **F1** | Open config screen |
@@ -182,7 +182,7 @@ Selecting **Browse A-Z** opens a 27-cell grid (A..Z plus `#` for non-letter titl
 | **S / cursor down** | Move down one grid row (+9 cells) |
 | **cursor right / D** | Move right within the row |
 | **cursor left / A** | Move left within the row; on column 0 (A, J, S) wall-bumps back to the source menu |
-| **Enter** | Enter the selected letter's entry list |
+| **Return** | Enter the selected letter's entry list |
 | **DEL** | Back to source menu |
 
 ### Browsing Entry Lists
@@ -193,7 +193,7 @@ When viewing a list of entries (from a letter, a Top 200, a search result, etc.)
 |-----|--------|
 | **W/S or cursor keys** | Move cursor; auto-pages at top/bottom |
 | **N / P** | Next / previous page (20 per page) |
-| **Enter** | Run entry (or open Releases if multiple versions exist) |
+| **Return** | Run entry (or open Releases if multiple versions exist) |
 | **cursor right** | Open Releases for a grouped entry |
 | **I** | Show info (title, group, year, type, top200, rating) |
 | **DEL / cursor left** | Back to parent menu |
@@ -208,7 +208,7 @@ Entries display additional indicators:
 
 ### Search
 
-Press **`/`** from the root menu to open search. The cursor starts in the input box; type to build a query (minimum 3 characters), Tab cycles the category filter (All / Games / Demos / Music). **Enter** or cursor-down switches to the result list; cursor-up at the top of the results (or **DEL**) returns to the input box. Two-mode design keeps held letters from corrupting the query during result navigation.
+Press **`/`** from the root menu to open search. The cursor starts in the input box; type to build a query (minimum 3 characters), Tab cycles the category filter (All / Games / Demos / Music). **Return** or cursor-down switches to the result list; cursor-up at the top of the results (or **DEL**) returns to the input box. Two-mode design keeps held letters from corrupting the query during result navigation.
 
 ### Grouped Entry Indicators
 
@@ -228,7 +228,7 @@ When viewing a grouped entry:
 When expanding a grouped entry (pressing **>**), you see all releases:
 - Shows cracker/release group name
 - Displays trainer count (+N) if available
-- Press **Enter** to run a specific release
+- Press **Return** to run a specific release
 - Press **Del** to go back to the previous list
 
 ### Info Screen
@@ -244,7 +244,7 @@ Press any key to return to the previous screen.
 
 ### Running Programs
 
-When you press Enter on an entry:
+When you press Return on an entry:
 1. The server uploads the file to your Ultimate II+
 2. The program is automatically executed
 3. Different file types are handled appropriately:

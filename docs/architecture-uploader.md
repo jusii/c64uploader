@@ -52,6 +52,10 @@ uploader/
 ├── dbgen_sqlite.go   # SQLite database generator
 ├── debug.go          # Remote debug subcommand (screen peek, key inject,
 │                     #   hex dump, scroll-rate probe, reset/reboot/menu)
+├── spiffy.go         # Spiffy-compatible HTTP API server — implements the
+│                     #   /leet/search/ REST endpoints the Ultimate firmware's
+│                     #   built-in Assembly64 browser expects (see
+│                     #   uploader/SPIFFY_HTTP_API.md)
 └── testclient.go     # Scratch TCP client for protocol debugging
                          (build-tagged `// +build ignore`, not in the binary)
 ```
@@ -68,6 +72,8 @@ Commands:
 - `server` - Start TCP protocol server for the native C64 client
 - `sqlitegen` - Generate SQLite database from Assembly64
 - `debug <sub>` - Remote debugging of the native client: screen peek, key injection, auto-repeat timing probe, memory dump, device reset/reboot
+
+When `server` is launched with `-spiffy-http-port <port>`, a second goroutine spins up an HTTP listener on that port serving the Spiffy-compatible `/leet/search/` REST API alongside the TCP line server. Both backed by the same SQLite handle. See [SPIFFY_HTTP_API.md](../uploader/SPIFFY_HTTP_API.md) for the wire format and the firmware-side config required to point the Ultimate's stock Assembly64 browser at this server.
 
 ### TCP Protocol Server (server_sqlite.go)
 

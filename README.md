@@ -20,7 +20,7 @@ A command-line tool that runs on your PC and communicates with the C64 Ultimate 
 - **Load Mode** - Upload and run individual files (PRG, CRT, D64, etc.) from local paths or remote URLs
 - **FTP Mode** - Transfer files to the C64 Ultimate's filesystem via FTP
 - **Poke Mode** - Modify C64 memory addresses (useful for cheats and memory tricks)
-- **Server Mode** - Host a lightweight protocol server for the C64 client application
+- **Server Mode** - Host a lightweight protocol server for the C64 client application, with an optional Spiffy-compatible HTTP API so the Ultimate firmware's stock Assembly64 browser can use this server as its upstream
 - **Debug Mode** - Remote screen peek, key injection, and machine control for debugging the native C64 client
 
 ### a64browser (C64 native application)
@@ -162,6 +162,31 @@ Start the C64 protocol server for the C64 client:
 
 The C64 protocol is a simple line-based protocol optimized for low-bandwidth C64 communication.
 See `uploader/C64PROTOCOL.md` for protocol details, or `uploader/SPIFFY_HTTP_API.md` for the Spiffy-compatible HTTP API.
+
+#### Using this server with the Ultimate firmware's stock Assembly64 browser
+
+When `-spiffy-http-port` is set, the server speaks the same `/leet/search/` REST API the Ultimate firmware's built-in Assembly64 search browser expects. Point the firmware at this server instead of `assembly64.com` and the stock browser becomes a fully working client — search, drill-down, mount/run, all backed by your local SQLite index. **No custom C64 cart required for this path.**
+
+To configure the Ultimate, edit its **Assembly Search Servers** JSON config to point at your machine:
+
+```json
+{
+  "host": "192.168.2.66",
+  "port": 8000,
+  "url-search":   "/leet/search/aql/0/100?query=",
+  "url-patterns": "/leet/search/aql/presets",
+  "url-entries":  "/leet/search/entries",
+  "url-download": "/leet/search/bin"
+}
+```
+
+Then start the server with the matching port:
+
+```bash
+./c64uploader server -assembly64 ~/assembly64 -spiffy-http-port 8000
+```
+
+The same daemon also runs our native cart's TCP line server on `-port` (default `6465`), so both clients can talk to the same SQLite index simultaneously.
 
 ### Database Generator
 

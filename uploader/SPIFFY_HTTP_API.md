@@ -121,9 +121,16 @@ Per-file fields:
 
 `isContentByItself`: boolean, present in upstream `assembly64.com` responses but the firmware's parser does not read it (verified — no reference in the JSON-handling code). We emit `false` for cosmetic compatibility.
 
-### `GET /leet/search/bin/<id>/<cat>/<idx>` and `GET /leet/search/bin/<id>/<cat>/<idx>/<filename>`
+### `GET /leet/search/bin/<id>/<cat>/<idx-or-filename>` (with optional `/<filename>` suffix)
 
-Downloads file `<idx>` from entry `<id>` in category `<cat>`. The firmware sends the integer index, not a filename, in the third path component; the optional fourth component is for human readability only.
+Downloads a file from entry `<id>` in category `<cat>`.
+
+The third path component can be **either** an integer index (`0`, `1`, …) or a URL-encoded filename. The firmware uses both:
+
+- **Integer index** — when the user picks "Run" / "Mount" on a search result. Comes from the `id` field in the `entries/<id>/<cat>` response.
+- **Filename** — when the firmware's filesystem layer mounts a downloaded image and re-requests it by basename (the `file_open` path). Lookup is case-insensitive against the `path` fields returned by `entries/<id>/<cat>`.
+
+An optional **fourth** path component is tolerated but ignored — some implementations append the filename after the integer index for human-readable URLs (`bin/123/1/0/MyDisk.d64`).
 
 **Response headers:**
 

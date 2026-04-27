@@ -874,6 +874,14 @@ bool fetch_info(long id)
 // would land in read-only ROM and the auto-repeat tracker would never reset.
 static byte last_key_scan;
 static byte next_fire_jiffy;
+// Consecutive-poll counter that gates last_key_scan release. The C64 matrix
+// occasionally reads "no key" for a single poll while the user is still
+// holding (electrical noise / scanner timing — see comment below). Only
+// declare release after the matrix is quiet for several polls in a row,
+// otherwise the brief glitch makes the next re-detection look like a
+// fresh press and held keys (esp. SPACE) fire as repeats.
+static byte release_count;
+#define RELEASE_STABLE_POLLS 3
 
 char get_key(void)
 {
@@ -932,6 +940,7 @@ char get_key(void)
         if (keyb_key & KSCAN_QUAL_DOWN)
         {
             byte new_k = keyb_key & 0x3f;
+            release_count = 0;
             // Spurious-edge re-fire: same scancode as last time, and level
             // state confirms the user has held the key continuously. Treat
             // as a held repeat, NOT a fresh press.
@@ -957,6 +966,7 @@ char get_key(void)
         else if (last_key_scan != 0xFF && key_pressed(last_key_scan))
         {
             // Same scan code still held on the matrix.
+            release_count = 0;
             if (!nav_repeat_ok)
                 return 0;
             if ((byte)(now - next_fire_jiffy) >= 128)
@@ -967,8 +977,17 @@ char get_key(void)
         }
         else
         {
-            // Released or no key at all: drop tracking.
+            // No key on this poll. Could be a genuine release, OR a brief
+            // matrix-read glitch while the key is still physically held.
+            // Only drop tracking after the quiet has held for several polls,
+            // so a 1-poll glitch doesn't masquerade as release-then-repress.
+            if (last_key_scan != 0xFF && release_count < RELEASE_STABLE_POLLS)
+            {
+                release_count++;
+                return 0;
+            }
             last_key_scan = 0xFF;
+            release_count = 0;
             return 0;
         }
     }

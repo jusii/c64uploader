@@ -1062,11 +1062,14 @@ char get_key(void)
                 if (k == KSCAN_I) return 'i';
                 if (k == KSCAN_CSR_RIGHT && !shift) return '\r';
             }
-            // Letter / digit fallthrough: typed character.
+            // Letter / digit / space fallthrough: typed character. Space
+            // matters for multi-word queries ("the new"), so it's allowed
+            // through here and at the append-to-query default-case below.
             if (k < 64) {
                 byte c = (byte)keyb_codes[shift ? k + 64 : k];
                 if (c >= 'a' && c <= 'z') return c - 32;
                 if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) return c;
+                if (c == ' ') return ' ';
             }
         }
         // In releases page
@@ -2209,7 +2212,7 @@ int main(void)
                 // the same letter scancodes are ignored; the user must DEL
                 // back to the box first.
                 if (current_page == PAGE_SEARCH && search_in_box &&
-                    ((key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9')))
+                    ((key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9') || key == ' '))
                 {
                     if (search_query_len < (int)sizeof(search_query) - 1)
                     {

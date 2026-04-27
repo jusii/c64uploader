@@ -863,10 +863,27 @@ bool fetch_info(long id)
 // uploader measure auto-repeat timing without a physical key press.
 #define DEBUG_HOLD_SCAN (*(volatile byte *)0x02A8)
 
-// Press-then-auto-repeat state. Jiffy clock low byte at $A2 ticks at 50 Hz
-// PAL and wraps every ~5s; all comparisons use modular byte arithmetic, so
-// short intervals (<128 ticks) behave correctly across wrap.
-#define JIFFY_LOW  (*(volatile byte *)0xA2)
+// Press-then-auto-repeat state. The KERNAL jiffy clock at $A2 only ticks
+// under the .prg target (KERNAL IRQ runs there). Cart targets bypass KERNAL
+// boot, so $A2 is frozen and any timer comparison against it stays stuck in
+// the initial-delay window forever — auto-repeat doesn't fire. We tick our
+// own jiffy off the VIC raster register ($D012) instead: it advances 50/60×
+// per second regardless of IRQ state. tick_jiffy() must be called more often
+// than once per frame for this to be precise; in practice the main loop
+// polls get_key() far faster.
+#define VIC_RASTER (*(volatile byte *)0xD012)
+static byte sw_jiffy;
+static byte last_raster;
+static inline void tick_jiffy(void)
+{
+    byte r = VIC_RASTER;
+    // Raster counts 0..(255 or 311) and wraps; on PAL $D012 wraps every
+    // 256 lines (the 9th bit lives in $D011), so we just count strict
+    // decreases as "frame transition".
+    if (r < last_raster)
+        ++sw_jiffy;
+    last_raster = r;
+}
 #define KEY_INITIAL_DELAY 18  // ~360ms between fresh press and first auto-repeat
 #define KEY_REPEAT_RATE    3  // ~60ms between repeats (~16 Hz)
 
@@ -885,6 +902,8 @@ static byte release_count;
 
 char get_key(void)
 {
+    tick_jiffy();
+
     byte injected = DEBUG_KEY_INJECT;
     if (injected)
     {
@@ -904,7 +923,7 @@ char get_key(void)
         k = hold & 0x3f;
         shift = (hold & 0x40) != 0;
 
-        byte now = JIFFY_LOW;
+        byte now = sw_jiffy;
         if (k != last_key_scan)
         {
             last_key_scan = k;
@@ -924,7 +943,7 @@ char get_key(void)
         // Oscar64's keyb_poll() is an edge detector: keyb_key is only non-zero
         // on the frame a key transitions from up to down. For held-key auto-
         // repeat we have to check keyb_matrix (level state) via key_pressed().
-        byte now = JIFFY_LOW;
+        byte now = sw_jiffy;
 
         // Two paths can produce a held-state repeat: the "still pressed on
         // the matrix" branch below, and a spurious one from keyb_poll —

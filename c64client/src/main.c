@@ -867,8 +867,8 @@ bool fetch_info(long id)
 // PAL and wraps every ~5s; all comparisons use modular byte arithmetic, so
 // short intervals (<128 ticks) behave correctly across wrap.
 #define JIFFY_LOW  (*(volatile byte *)0xA2)
-#define KEY_INITIAL_DELAY 20  // ~400ms between fresh press and first auto-repeat
-#define KEY_REPEAT_RATE    4  // ~80ms between repeats (~12 Hz)
+#define KEY_INITIAL_DELAY 18  // ~360ms between fresh press and first auto-repeat
+#define KEY_REPEAT_RATE    3  // ~60ms between repeats (~16 Hz)
 
 // Initialized to 0xFF by init_state() — under cart targets a static `= 0xFF`
 // would land in read-only ROM and the auto-repeat tracker would never reset.
@@ -979,9 +979,19 @@ char get_key(void)
         {
             // No key on this poll. Could be a genuine release, OR a brief
             // matrix-read glitch while the key is still physically held.
-            // Only drop tracking after the quiet has held for several polls,
-            // so a 1-poll glitch doesn't masquerade as release-then-repress.
-            if (last_key_scan != 0xFF && release_count < RELEASE_STABLE_POLLS)
+            //
+            // For typing keys (everything except nav), debounce: only drop
+            // tracking after the quiet has held for several polls, so a
+            // 1-poll glitch doesn't masquerade as release-then-repress
+            // (which is what made SPACE fire repeatedly).
+            //
+            // For nav keys (W / S / cursor-down / cursor-right), drop
+            // immediately like the original code — they're explicitly
+            // allowed to auto-repeat, and debouncing the release here makes
+            // the matrix-glitch case stall the held-branch's fire ticks,
+            // which the user perceives as "scroll keys don't repeat".
+            if (last_key_scan != 0xFF && !nav_repeat_ok &&
+                release_count < RELEASE_STABLE_POLLS)
             {
                 release_count++;
                 return 0;

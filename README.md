@@ -11,8 +11,13 @@ Three ways to browse your Assembly64 collection, all backed by the same Go serve
 > [!NOTE]
 > This code was generated with AI coding assistant and is not thoroughly tested or reviewed.
 
-
 ![System Diagram](./docs/system-diagram.png)
+
+## Demo
+
+<video src="screenshots/c64uploader.mp4" controls width="720"></video>
+
+If the video doesn't play inline above, download it from [screenshots/c64uploader.mp4](screenshots/c64uploader.mp4).
 
 ## Features
 
@@ -380,3 +385,10 @@ When a category menu includes `BROWSE A-Z`, selecting it opens a **27-cell lette
 - **Space** - Toggle `AUTOSTART`
 - **DEL** - Delete character (when editing) or back to previous page
 - Numbers and `.` - Enter IP address / port
+
+## Credits
+
+Joint project — two repos kept in sync, contributions flow both ways.
+
+- **[@tsaarni](https://github.com/tsaarni)** ([tsaarni/c64uploader](https://github.com/tsaarni/c64uploader)) — original author and primary developer of the `c64uploader` Go server
+- **[@jusii](https://github.com/jusii)** ([jusii/c64uploader](https://github.com/jusii/c64uploader)) — `a64browser` native C64 cartridge / EasyFlash client (Oscar64)

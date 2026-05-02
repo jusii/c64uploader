@@ -15,7 +15,8 @@ Three ways to browse your Assembly64 collection, all backed by the same Go serve
 
 ## Demo
 
-<video src="screenshots/c64uploader.mp4" controls width="720"></video>
+<!-- The src below uses an absolute raw URL because GitHub does not serve relative-path video bytes from README. If you fork/pull this repo, update the URL to point at your own raw branch, or replace it with a user-attachments URL from a GitHub issue uploader. -->
+<video src="https://github.com/jusii/c64uploader/raw/main/screenshots/c64uploader.mp4" controls width="720"></video>
 
 If the video doesn't play inline above, download it from [screenshots/c64uploader.mp4](screenshots/c64uploader.mp4).
 

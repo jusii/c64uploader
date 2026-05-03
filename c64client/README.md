@@ -2,6 +2,8 @@
 
 Native C64 client for browsing the Assembly64 database via Ultimate II+ network interface.
 
+> **License: GPL v3.** This subdirectory is licensed under the GNU General Public License v3 (see [LICENSE](LICENSE)) because [src/ultimate.c](src/ultimate.c) and [src/ultimate.h](src/ultimate.h) are ported from [xlar54/ultimateii-dos-lib](https://github.com/xlar54/ultimateii-dos-lib) (GPL v3). The rest of the c64uploader project (the Go server under [`uploader/`](../uploader/)) remains under Apache 2.0 — see the [top-level README](../README.md#license) for details.
+
 ## Requirements
 
 - **oscar64** compiler - https://github.com/drmortalwombat/oscar64

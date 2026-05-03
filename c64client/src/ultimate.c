@@ -2,7 +2,13 @@
  * Ultimate 64/II+ Command Library for Oscar64
  *
  * Ported from cc65 version by Scott Hutter, Francesco Sblendorio
+ * (https://github.com/xlar54/ultimateii-dos-lib)
  * Oscar64 port for c64uploader project
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Derived from xlar54/ultimateii-dos-lib (GPL v3) and therefore
+ * distributed under the same terms. See ../LICENSE for the full text.
  *****************************************************************/
 
 #include <string.h>

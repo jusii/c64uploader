@@ -3,6 +3,11 @@
  *
  * Native C64 client for browsing Assembly64 database via
  * Ultimate II+ network interface.
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Statically links the GPL v3 ultimate.{c,h} UCI library, so the
+ * resulting binary is GPL v3. See ../LICENSE for the full text.
  *****************************************************************/
 
 #include <stdio.h>

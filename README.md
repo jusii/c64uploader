@@ -393,3 +393,12 @@ Joint project — two repos kept in sync, contributions flow both ways.
 
 - **[@tsaarni](https://github.com/tsaarni)** ([tsaarni/c64uploader](https://github.com/tsaarni/c64uploader)) — original author and primary developer of the `c64uploader` Go server
 - **[@jusii](https://github.com/jusii)** ([jusii/c64uploader](https://github.com/jusii/c64uploader)) — `a64browser` native C64 cartridge / EasyFlash client (Oscar64)
+
+## License
+
+This repository is dual-licensed along directory boundaries:
+
+- **[`uploader/`](uploader/)** (the Go server) and the rest of the top-level project — **Apache License 2.0**, see [LICENSE](LICENSE).
+- **[`c64client/`](c64client/)** (the `a64browser` native C64 client) — **GNU General Public License v3 or later**, see [c64client/LICENSE](c64client/LICENSE). This subdirectory is GPL because [c64client/src/ultimate.c](c64client/src/ultimate.c) and [c64client/src/ultimate.h](c64client/src/ultimate.h) are ported from [xlar54/ultimateii-dos-lib](https://github.com/xlar54/ultimateii-dos-lib) (GPL v3), and the linked binary inherits that license.
+
+The two components are independent processes that talk over a network socket — the GPL on the C64 side does not extend to the Apache-licensed Go server.

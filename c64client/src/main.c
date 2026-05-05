@@ -349,21 +349,44 @@ void save_settings(void)
 
 bool connect_to_server(void)
 {
+    // Close any prior socket. Even after the server dies on its end,
+    // the Ultimate firmware still considers the old socket open until
+    // we explicitly close it — and may reject the next uci_tcp_connect
+    // because resources are still bound. Without this cleanup the user
+    // sees "connect failed" on every retry until they reboot the C64.
+    if (connected)
+    {
+        uci_socket_close(socket_id);
+        connected = false;
+    }
+    uci_reset_data();
+
     print_status("connecting...");
 
     socket_id = uci_tcp_connect(server_host, server_port);
 
-    if (!uci_success())
+    // socket_id == 0 catches the firmware-reports-success-but-no-socket
+    // edge case where uci_status is "00" yet no actual TCP connection
+    // was made (rare, but cheap to guard against).
+    if (!uci_success() || socket_id == 0)
     {
-        print_status("connect failed!");
+        print_status("connect failed - check server address");
+        return false;
+    }
+
+    // Read greeting line "OK c64uploader". If the TCP socket is open
+    // but the server never sends bytes (wrong port, server crashed,
+    // firewall sinkhole), uci_tcp_nextline returns false after its
+    // internal retry budget — without this check we would silently
+    // proceed into the menu and hang on the first real request.
+    if (!uci_tcp_nextline(socket_id, line_buffer, sizeof(line_buffer)))
+    {
+        uci_socket_close(socket_id);
+        print_status("no response from server");
         return false;
     }
 
     connected = true;
-
-    // Read greeting line "OK c64uploader"
-    uci_tcp_nextline(socket_id, line_buffer, sizeof(line_buffer));
-
     print_status("connected!");
     return true;
 }
@@ -1607,21 +1630,35 @@ int main(void)
     vic.color_border = VCOL_BLACK;
     vic.color_back = VCOL_BLACK;
 
-    clear_screen();
-    print_at_color(0, 0, "assembly64 (local)", 7);
-    print_at(0, 2, "checking ultimate...");
-
     // Verify the Ultimate UCI is responding. DOS_CMD_IDENTIFY returns a
     // firmware subsystem string (e.g. "ULTIMATE-II DOS V1.2") — the actual
     // product name (II+ / 64 / C64 Ultimate) is compile-time and not
     // exposed via UCI, so we just show whatever the device tells us.
-    uci_identify();
-    if (!uci_success())
+    //
+    // uci_identify() returns false if the UCI command interface is
+    // disabled in the Ultimate firmware menu (status reads open-bus
+    // 0xFF — would have hung the C64 forever in the original cc65 lib).
+    // Loop on failure so the user can fix the firmware setting (or
+    // recover from a wedged UCI state caused by a previous run) and
+    // retry without re-uploading the .prg.
+    while (true)
     {
-        print_at(0, 4, "ultimate not found!");
-        print_at(0, 6, "press any key to exit");
-        wait_key();
-        return 1;
+        clear_screen();
+        print_at_color(0, 0, "assembly64 (local)", 7);
+        print_at(0, 2, "checking ultimate...");
+
+        if (uci_identify() && uci_success()) break;
+
+        print_at(0, 4, "ultimate not responding!");
+        print_at(0, 6, "if command interface is off,");
+        print_at(0, 7, "enable it in ultimate menu:");
+        print_at(0, 8, "  memory & roms -> command if.");
+        print_at(0, 10, "return: retry   f7: exit");
+
+        char k;
+        do { k = get_key(); } while (k == 0);
+        if (k == 0x18) return 1;          // F7 → exit
+        // Any other key (Return, etc.) loops back to retry.
     }
     strncpy(diag_ultimate, uci_data, sizeof(diag_ultimate) - 1);
     diag_ultimate[sizeof(diag_ultimate) - 1] = 0;

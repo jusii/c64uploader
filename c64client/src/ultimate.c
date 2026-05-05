@@ -19,6 +19,41 @@
 char uci_status[UCI_STATUS_QUEUE_SZ];
 char uci_data[UCI_DATA_QUEUE_SZ * 2];
 
+// Runtime-resolved I/O window. Set by uci_identify() — see the header
+// for why both $DE1C and $DF1C are considered. No initializers because
+// cart targets place initialized statics in read-only ROM; these end
+// up in BSS (NULL at boot) and must be set before any UCI op fires.
+volatile uint8_t *uci_control_reg;
+volatile uint8_t *uci_status_reg;
+volatile uint8_t *uci_cmd_data_reg;
+volatile uint8_t *uci_id_reg;
+volatile uint8_t *uci_resp_data_reg;
+volatile uint8_t *uci_status_data_reg;
+
+static void uci_set_window(uint16_t base)
+{
+    uci_control_reg     = (volatile uint8_t*)(base + 0);
+    uci_status_reg      = (volatile uint8_t*)(base + 0);
+    uci_cmd_data_reg    = (volatile uint8_t*)(base + 1);
+    uci_id_reg          = (volatile uint8_t*)(base + 1);
+    uci_resp_data_reg   = (volatile uint8_t*)(base + 2);
+    uci_status_data_reg = (volatile uint8_t*)(base + 3);
+}
+
+// Probe a candidate I/O window for a live UCI. A live window has at
+// least one of the four bytes returning something other than open-bus
+// 0xFF; a dead window reads all 0xFF in I/O space when the firmware
+// hasn't mapped anything there.
+static bool uci_window_alive(uint16_t base)
+{
+    uint8_t i;
+    for (i = 0; i < 4; i++)
+    {
+        if (*((volatile uint8_t*)(base + i)) != 0xFF) return true;
+    }
+    return false;
+}
+
 // Internal state. No initializers — cart targets place initialized statics
 // in read-only ROM. uci_target is set to UCI_TARGET_DOS1 lazily by callers
 // (every uci_settarget(...) does so explicitly), so leaving it 0 here is
@@ -27,6 +62,83 @@ static uint8_t uci_target;
 static int uci_data_index;
 static int uci_data_len;
 static char temp_char[2];
+
+// Set to true once any poll loop sees the open-bus 0xFF pattern (UCI
+// disabled in firmware) or exhausts its iteration budget. Once tripped,
+// every higher-level operation short-circuits at entry instead of
+// spinning on dead registers. Callers detect it via uci_identify()
+// returning false at boot.
+static bool uci_failed;
+
+//-----------------------------------------------------------------------------
+// Bounded poll helpers
+//
+// The original cc65 library used unbounded `while (status & mask)` loops.
+// That deadlocks the C64 if UCI is disabled in firmware (registers read
+// open-bus 0xFF — see ultimate.h header comment) or if the device gets
+// into a weird state. These helpers bail on either condition.
+//
+// UCI_POLL_LIMIT iterations of a status read is roughly 1–2 seconds on a
+// 1 MHz 6502 — orders of magnitude longer than any legitimate UCI op.
+//-----------------------------------------------------------------------------
+
+#define UCI_POLL_LIMIT 65535U
+
+// uci_failed is only set on the permanent "UCI disabled" signal — a
+// run of UCI_OPENBUS_THRESHOLD consecutive 0xFF reads with no real
+// data in between. Single transient 0xFF reads (which we observed on
+// real hardware right after C64 reset on an enabled UCI) are tolerated.
+// A plain poll-limit timeout returns false but does NOT set the global
+// flag, so a retry of the same operation (e.g. the user fixing a wrong
+// server address and re-connecting) can still run.
+
+#define UCI_OPENBUS_THRESHOLD 1024  // consecutive 0xFF reads → "UCI dead"
+
+static bool uci_wait_until(uint8_t mask, uint8_t expected)
+{
+    uint16_t poll = UCI_POLL_LIMIT;
+    uint16_t openbus = 0;
+    uint8_t s;
+    while (poll--)
+    {
+        s = *UCI_STATUS_REG;
+        if (s == 0xFF)
+        {
+            if (++openbus >= UCI_OPENBUS_THRESHOLD)
+            {
+                uci_failed = true;
+                return false;
+            }
+            continue;  // never let 0xFF accidentally satisfy the predicate
+        }
+        openbus = 0;
+        if ((s & mask) == expected) return true;
+    }
+    return false;
+}
+
+static bool uci_wait_while(uint8_t mask, uint8_t state)
+{
+    uint16_t poll = UCI_POLL_LIMIT;
+    uint16_t openbus = 0;
+    uint8_t s;
+    while (poll--)
+    {
+        s = *UCI_STATUS_REG;
+        if (s == 0xFF)
+        {
+            if (++openbus >= UCI_OPENBUS_THRESHOLD)
+            {
+                uci_failed = true;
+                return false;
+            }
+            continue;
+        }
+        openbus = 0;
+        if ((s & mask) != state) return true;
+    }
+    return false;
+}
 
 //-----------------------------------------------------------------------------
 // Low-level register access
@@ -37,14 +149,28 @@ void uci_settarget(uint8_t id)
     uci_target = id;
 }
 
+// A single 0xFF read here just means "no data" — do not set uci_failed.
+// uci_failed is reserved for the sustained-0xFF case detected inside
+// the wait helpers (1024 consecutive open-bus reads). Tripping it on
+// one transient 0xFF caused every subsequent op to short-circuit, which
+// manifested as "the second connect attempt silently does nothing"
+// after the first one failed.
 bool uci_isdataavailable(void)
 {
-    return (*UCI_STATUS_REG & UCI_STAT_DATA_AV) != 0;
+    uint8_t s;
+    if (uci_failed) return false;
+    s = *UCI_STATUS_REG;
+    if (s == 0xFF) return false;
+    return (s & UCI_STAT_DATA_AV) != 0;
 }
 
 bool uci_isstatusdataavailable(void)
 {
-    return (*UCI_STATUS_REG & UCI_STAT_STAT_AV) != 0;
+    uint8_t s;
+    if (uci_failed) return false;
+    s = *UCI_STATUS_REG;
+    if (s == 0xFF) return false;
+    return (s & UCI_STAT_STAT_AV) != 0;
 }
 
 void uci_sendcommand(uint8_t *bytes, int count)
@@ -52,13 +178,14 @@ void uci_sendcommand(uint8_t *bytes, int count)
     int x;
     int success = 0;
 
+    if (uci_failed) return;
+
     bytes[0] = uci_target;
 
     while (success == 0)
     {
-        // Wait for idle state: bits 5 and 4 both clear
-        while (!((*UCI_STATUS_REG & 0x20) == 0 && (*UCI_STATUS_REG & 0x10) == 0))
-            ;
+        // Wait for idle state: bits 5 and 4 both clear ((s & 0x30) == 0)
+        if (!uci_wait_until(0x30, 0x00)) return;
 
         // Write bytes to command data register
         for (x = 0; x < count; x++)
@@ -75,9 +202,8 @@ void uci_sendcommand(uint8_t *bytes, int count)
         }
         else
         {
-            // Wait for command to complete: bit 5 clear, bit 4 set means busy
-            while ((*UCI_STATUS_REG & 0x20) == 0 && (*UCI_STATUS_REG & 0x10) == 0x10)
-                ;
+            // Wait for command to complete (leave the busy state 0x10)
+            if (!uci_wait_while(0x30, 0x10)) return;
             success = 1;
         }
     }
@@ -85,10 +211,10 @@ void uci_sendcommand(uint8_t *bytes, int count)
 
 void uci_accept(void)
 {
-    // Acknowledge the data
+    if (uci_failed) return;
+    // Acknowledge the data, then wait for the device to clear DATA_ACC
     *UCI_CONTROL_REG |= UCI_CTRL_DATA_ACC;
-    while ((*UCI_STATUS_REG & UCI_STAT_DATA_ACC) != 0)
-        ;
+    uci_wait_while(UCI_STAT_DATA_ACC, UCI_STAT_DATA_ACC);
 }
 
 void uci_abort(void)
@@ -99,9 +225,10 @@ void uci_abort(void)
 int uci_readdata(void)
 {
     int count = 0;
+    int max = UCI_DATA_QUEUE_SZ * 2 - 1;
     uci_data[0] = 0;
 
-    while (uci_isdataavailable())
+    while (uci_isdataavailable() && count < max)
     {
         uci_data[count++] = *UCI_RESP_DATA_REG;
     }
@@ -112,9 +239,23 @@ int uci_readdata(void)
 int uci_readstatus(void)
 {
     int count = 0;
+    int max = UCI_STATUS_QUEUE_SZ - 1;
     uci_status[0] = 0;
 
-    while (uci_isstatusdataavailable())
+    // For slower ops (TCP connect, file open) the firmware can set
+    // DATA_AV before STAT_AV. Without this short poll, uci_readstatus
+    // sometimes returns empty even on success, and uci_success() reports
+    // a phantom failure. 1024 iters is plenty for normal firmware delays
+    // and keeps the worst-case overhead per call low — important because
+    // some hot paths (e.g. uci_tcp_nextchar's 5000-retry loop) call
+    // through readstatus thousands of times.
+    if (!uci_failed)
+    {
+        uint16_t poll = 1024;
+        while (poll-- && !uci_isstatusdataavailable()) {}
+    }
+
+    while (uci_isstatusdataavailable() && count < max)
     {
         uci_status[count++] = *UCI_STATUS_DATA_REG;
     }
@@ -126,14 +267,67 @@ int uci_readstatus(void)
 // Identification
 //-----------------------------------------------------------------------------
 
-void uci_identify(void)
+// Drain any stale UCI state left over from a previous PRG run or a
+// partially-completed operation. Bounded by `max_iters` so we never
+// hang regardless of how the firmware is misbehaving.
+static void uci_drain_stale_state(uint16_t max_iters)
+{
+    uint8_t s;
+    *UCI_CONTROL_REG = UCI_CTRL_ABORT;
+    while (max_iters--)
+    {
+        s = *UCI_STATUS_REG;
+        if (s == 0xFF) return;                          // open bus
+        if ((s & 0x30) == 0 && (s & 0xC0) == 0) return; // idle, nothing pending
+        if (s & UCI_STAT_ERROR)         { *UCI_CONTROL_REG = UCI_CTRL_CLR_ERR;  continue; }
+        if (s & UCI_STAT_DATA_AV)       { (void)*UCI_RESP_DATA_REG;             continue; }
+        if (s & UCI_STAT_STAT_AV)       { (void)*UCI_STATUS_DATA_REG;           continue; }
+        if (s & UCI_STAT_DATA_ACC)      { *UCI_CONTROL_REG = UCI_CTRL_DATA_ACC; continue; }
+        // State bits 5/4 set with nothing else to drain — firmware is
+        // mid-command. Give it a few more polls to settle.
+    }
+}
+
+bool uci_identify(void)
 {
     uint8_t cmd[] = {0x00, DOS_CMD_IDENTIFY};
+
+    // Clear stale failure state so the user can retry after fixing
+    // firmware settings. The bounded poll helpers will set uci_failed
+    // back to true if the status register stays at open-bus 0xFF for
+    // long enough during the operation below (UCI disabled in firmware).
+    uci_failed = false;
+
+    // Probe both possible I/O windows and pick whichever one is mapped
+    // by the firmware. The compile-time target only flips probe order:
+    //   CRT (EasyFlash claims $DF00) → try $DE1C first
+    //   PRG                          → try $DF1C first
+    // If neither answers, point at the preferred default and let the
+    // bounded poll helpers report the failure with a clear error.
+#ifdef OSCAR_TARGET_CRT_EASYFLASH
+    if      (uci_window_alive(0xDE1C)) uci_set_window(0xDE1C);
+    else if (uci_window_alive(0xDF1C)) uci_set_window(0xDF1C);
+    else                                uci_set_window(0xDE1C);
+#else
+    if      (uci_window_alive(0xDF1C)) uci_set_window(0xDF1C);
+    else if (uci_window_alive(0xDE1C)) uci_set_window(0xDE1C);
+    else                                uci_set_window(0xDF1C);
+#endif
+
+    // Recover from any wedged state before issuing the real command.
+    // Without this, a soft-reset / re-load that lands while firmware
+    // still has unread data from a prior session causes the wait_until
+    // in uci_sendcommand below to time out and falsely report "UCI
+    // disabled" even though UCI is fine.
+    uci_drain_stale_state(256);
+
     uci_settarget(UCI_TARGET_DOS1);
     uci_sendcommand(cmd, 2);
     uci_readdata();
     uci_readstatus();
     uci_accept();
+
+    return !uci_failed;
 }
 
 //-----------------------------------------------------------------------------
@@ -654,8 +848,13 @@ char uci_tcp_nextchar(uint8_t socketid)
             uci_data_len = uci_socket_read(socketid, UCI_DATA_QUEUE_SZ - 4);
             if (uci_data_len == 0)
                 return 0; // EOF
-            if (++retries > 5000)
-                return 0; // Timeout - connection likely dead
+            if (++retries > 500)
+                return 0; // Timeout - connection likely dead.
+                          // 500 retries is enough for any responsive
+                          // server. Was 5000, but each retry now goes
+                          // through uci_readstatus' bounded STAT_AV
+                          // wait, and 5000 × that pushed the silent-
+                          // server timeout into the tens of seconds.
         } while (uci_data_len == -1);
 
         result = uci_data[2];

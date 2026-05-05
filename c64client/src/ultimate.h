@@ -22,26 +22,31 @@
 
 // Hardware registers for Ultimate II+ Command Interface.
 //
-// Default mapping is $DF1C-$DF1F (I/O 2). When we run as a subtype-1
-// "REU-aware EasyFlash" cart, EasyFlash claims all of $DF00-$DFFF and
-// the Ultimate firmware relocates UCI to $DE1C-$DE1F (I/O 1) — the
-// CART_UCI_DE1C flag in GideonZ/1541ultimate (commit 8e92e6d). Reading
-// the old $DF1C addresses returns open-bus 0xFF and uci_identify hangs.
-#ifdef OSCAR_TARGET_CRT_EASYFLASH
-#define UCI_CONTROL_REG    ((volatile uint8_t*)0xDE1C)
-#define UCI_STATUS_REG     ((volatile uint8_t*)0xDE1C)
-#define UCI_CMD_DATA_REG   ((volatile uint8_t*)0xDE1D)
-#define UCI_ID_REG         ((volatile uint8_t*)0xDE1D)
-#define UCI_RESP_DATA_REG  ((volatile uint8_t*)0xDE1E)
-#define UCI_STATUS_DATA_REG ((volatile uint8_t*)0xDE1F)
-#else
-#define UCI_CONTROL_REG    ((volatile uint8_t*)0xDF1C)
-#define UCI_STATUS_REG     ((volatile uint8_t*)0xDF1C)
-#define UCI_CMD_DATA_REG   ((volatile uint8_t*)0xDF1D)
-#define UCI_ID_REG         ((volatile uint8_t*)0xDF1D)
-#define UCI_RESP_DATA_REG  ((volatile uint8_t*)0xDF1E)
-#define UCI_STATUS_DATA_REG ((volatile uint8_t*)0xDF1F)
-#endif
+// Two known I/O windows:
+//   $DF1C-$DF1F (I/O 2) — historical default
+//   $DE1C-$DE1F (I/O 1) — used when EasyFlash claims $DF00-$DFFF, and on
+//                         some firmware versions for the PRG context too
+//                         (observed at runtime: only $DE1C had real
+//                         status bits, $DF1C read open-bus 0xFF on a
+//                         working device with UCI enabled).
+//
+// Rather than picking one at compile time, uci_identify() probes both
+// at boot and points the volatile accessors below at the live window.
+// The EasyFlash compile-time hint just sets the initial guess so the
+// cart doesn't waste a probe on an address SwiftLink could intercept.
+extern volatile uint8_t *uci_control_reg;
+extern volatile uint8_t *uci_status_reg;
+extern volatile uint8_t *uci_cmd_data_reg;
+extern volatile uint8_t *uci_id_reg;
+extern volatile uint8_t *uci_resp_data_reg;
+extern volatile uint8_t *uci_status_data_reg;
+
+#define UCI_CONTROL_REG     uci_control_reg
+#define UCI_STATUS_REG      uci_status_reg
+#define UCI_CMD_DATA_REG    uci_cmd_data_reg
+#define UCI_ID_REG          uci_id_reg
+#define UCI_RESP_DATA_REG   uci_resp_data_reg
+#define UCI_STATUS_DATA_REG uci_status_data_reg
 
 // Control register bits
 #define UCI_CTRL_PUSH_CMD   0x01
@@ -146,8 +151,13 @@ void uci_abort(void);
 bool uci_isdataavailable(void);
 bool uci_isstatusdataavailable(void);
 
-// Identification
-void uci_identify(void);
+// Identification.
+// Probes the UCI registers and runs DOS_CMD_IDENTIFY. Returns false if
+// UCI is disabled in the Ultimate firmware menu (status register reads
+// open-bus 0xFF) or if any internal poll loop times out. On false, the
+// device is unusable and every subsequent uci_*() call short-circuits.
+// On true, run uci_success() to confirm the IDENTIFY response itself.
+bool uci_identify(void);
 
 // Directory operations
 void uci_get_path(void);

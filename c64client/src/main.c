@@ -1653,7 +1653,9 @@ int main(void)
         print_at(0, 6, "if command interface is off,");
         print_at(0, 7, "enable it in ultimate menu:");
         print_at(0, 8, "  memory & roms -> command if.");
-        print_at(0, 10, "return: retry   f7: exit");
+        print_at(0, 10, "if that has no effect, try the");
+        print_at(0, 11, ".crt build instead of the .prg.");
+        print_at(0, 13, "return: retry   f7: exit");
 
         char k;
         do { k = get_key(); } while (k == 0);

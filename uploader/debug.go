@@ -251,6 +251,7 @@ func runDebug(args []string) {
 		fmt.Fprintf(os.Stderr, "  scroll-rate <direction> <sec> Hold a key for N seconds and report rows/second\n")
 		fmt.Fprintf(os.Stderr, "  peek <hexaddr> <len>          Hex+ASCII dump of memory at hex address for len bytes\n")
 		fmt.Fprintf(os.Stderr, "  peekstr <hexaddr> [maxlen]    Read bytes at address, stop at NUL, print as C string\n")
+		fmt.Fprintf(os.Stderr, "  poke <hexaddr> <hexbyte>...   Write one or more hex bytes to memory at address\n")
 		fmt.Fprintf(os.Stderr, "  reset                         Soft reset the C64\n")
 		fmt.Fprintf(os.Stderr, "  reboot                        Reboot the Ultimate firmware\n")
 		fmt.Fprintf(os.Stderr, "  menu                          Press Ultimate menu button\n")
@@ -385,6 +386,31 @@ func runDebug(args []string) {
 			os.Exit(1)
 		}
 		fmt.Print(hexDump(addr, data))
+	case "poke":
+		if fs.NArg() < 2 {
+			fmt.Fprintln(os.Stderr, "poke: need hex address and at least one hex byte")
+			os.Exit(1)
+		}
+		addr := fs.Arg(0)
+		bytes := make([]byte, 0, fs.NArg()-1)
+		for i := 1; i < fs.NArg(); i++ {
+			tok := strings.TrimPrefix(strings.TrimPrefix(fs.Arg(i), "0x"), "0X")
+			var b uint
+			if _, err := fmt.Sscanf(tok, "%x", &b); err != nil || b > 0xFF {
+				fmt.Fprintf(os.Stderr, "poke: bad hex byte %q\n", fs.Arg(i))
+				os.Exit(1)
+			}
+			bytes = append(bytes, byte(b))
+		}
+		if err := client.WriteMemory(addr, bytes); err != nil {
+			fmt.Fprintf(os.Stderr, "poke failed: %v\n", err)
+			os.Exit(1)
+		}
+		dump := make([]string, len(bytes))
+		for i, b := range bytes {
+			dump[i] = fmt.Sprintf("%02x", b)
+		}
+		fmt.Printf("poked %d byte(s) at $%s: %s\n", len(bytes), addr, strings.Join(dump, " "))
 	case "peekstr":
 		if fs.NArg() < 1 {
 			fmt.Fprintln(os.Stderr, "peekstr: need hex address")
